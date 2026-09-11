@@ -1,0 +1,49 @@
+title: Unexpected Privilege Grant
+id: sf-idn-0001
+name: privilege_grant
+status: test
+description: |
+  A principal is granted administrative privileges - an IAM policy or role
+  assignment, or membership of a privileged group (sudo, wheel, admins).
+  Grants performed by automation service accounts are filtered out.
+author: SignalForge
+date: 2026/04/14
+references:
+  - https://attack.mitre.org/techniques/T1098/003/
+logsource:
+  category: iam
+detection:
+  selection_privilege_assignment:
+    class_uid: 3005
+    activity_id: 1
+    status: Success
+  selection_privileged_group:
+    class_uid: 3006
+    activity_id: 3
+    group.type: Privileged
+  selection_sudo_session:
+    class_uid: 3003
+    activity_id: 1
+    status: Success
+    group.name: sudo
+  filter_automation:
+    actor.user.type: Service
+  condition: 1 of selection_* and not filter_automation
+fields:
+  - actor.user.name
+  - user.name
+  - group.name
+falsepositives:
+  - Scheduled access reviews that re-apply role bindings
+  - An approved just-in-time elevation request
+  - Configuration management re-asserting group membership
+level: high
+tags:
+  - attack.privilege_escalation
+  - attack.persistence
+  - attack.t1098
+  - attack.t1098.003
+signalforge:
+  confidence: 8
+  dedup_by: [user.name, group.name]
+  response_playbook: revoke_privileges

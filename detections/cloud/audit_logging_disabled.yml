@@ -1,0 +1,39 @@
+title: Cloud Audit Logging Disabled
+id: sf-cloud-0002
+name: cloud_audit_logging_disabled
+status: test
+description: |
+  CloudTrail logging was stopped or a trail was deleted. There is no benign
+  reason for this to happen outside a planned decommission, and it blinds every
+  other detection in this repository - hence critical.
+author: SignalForge
+date: 2026/04/16
+references:
+  - https://attack.mitre.org/techniques/T1562/008/
+logsource:
+  category: api
+  product: aws
+detection:
+  selection:
+    api.operation:
+      - StopLogging
+      - DeleteTrail
+      - PutEventSelectors
+  filter_read_only:
+    status: Failure
+  condition: selection and not filter_read_only
+fields:
+  - actor.user.name
+  - api.operation
+  - device.region
+falsepositives:
+  - Decommissioning a trail as part of an approved infrastructure change
+  - Terraform replacing a trail resource in place
+level: critical
+tags:
+  - attack.defense_evasion
+  - attack.t1562
+  - attack.t1562.008
+signalforge:
+  confidence: 9
+  response_playbook: notify_only

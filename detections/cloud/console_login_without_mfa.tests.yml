@@ -1,0 +1,68 @@
+rule: sf-cloud-0001
+tests:
+  - name: console login without MFA fires
+    kind: positive
+    expect: alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: ConsoleLogin
+          eventSource: signin.amazonaws.com
+          awsRegion: us-east-1
+          sourceIPAddress: 185.220.101.7
+          userAgent: Mozilla/5.0
+          userIdentity: {type: IAMUser, userName: alex, accountId: "123456789012"}
+          responseElements: {ConsoleLogin: Success}
+          additionalEventData: {MFAUsed: "No", LoginTo: "https://console.aws.amazon.com/"}
+          eventID: e-login-1
+
+  - name: console login with MFA does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: ConsoleLogin
+          eventSource: signin.amazonaws.com
+          sourceIPAddress: 10.0.4.82
+          userIdentity: {type: IAMUser, userName: alex, accountId: "123456789012"}
+          responseElements: {ConsoleLogin: Success}
+          additionalEventData: {MFAUsed: "Yes"}
+          eventID: e-login-2
+
+  - name: failed console login does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: ConsoleLogin
+          eventSource: signin.amazonaws.com
+          sourceIPAddress: 185.220.101.7
+          userIdentity: {type: IAMUser, userName: alex}
+          responseElements: {ConsoleLogin: Failure}
+          additionalEventData: {MFAUsed: "No"}
+          eventID: e-login-3
+
+  - name: ssh logon is out of scope for an aws-scoped rule
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        raw: "{time} web-01 sshd[2312]: Accepted password for alex from 10.0.4.82 port 55240 ssh2"
+
+  - name: federated SAML sign-in is filtered
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: ConsoleLogin
+          eventSource: signin.amazonaws.com
+          sourceIPAddress: 203.0.113.24
+          userIdentity: {type: SAMLUser, userName: dana, accountId: "123456789012"}
+          responseElements: {ConsoleLogin: Success}
+          additionalEventData:
+            MFAUsed: "No"
+            SamlProviderArn: arn:aws:iam::123456789012:saml-provider/okta
+          eventID: e-login-4

@@ -1,0 +1,42 @@
+# Asset & identity criticality inventory.  Feeds the AssetCriticality factor of
+# the risk model (see libs/signalforge/signalforge/correlate/risk.py).
+# Values: low (3) | medium (5) | high (8) | critical (10).  Glob patterns allowed.
+
+hosts:
+  prod-payments-*: critical
+  prod-api-*: high
+  prod-*: high
+  web-01: medium
+  web-*: medium
+  staging-*: low
+  dev-*: low
+
+users:
+  root@example.com: critical
+  dana@example.com: high
+  "*@example.com": medium
+
+resources:
+  arn:aws:s3:::prod-payments-*: critical
+  arn:aws:s3:::customer-*: critical
+  prod-payments-db: critical
+  customer-records: critical
+  api-keys: high
+  billing-export: high
+  internal-wiki: low
+
+networks:
+  10.0.0.0/8: internal
+  192.168.0.0/16: internal
+
+# Accounts whose behaviour is expected to look anomalous.  Service accounts
+# damp the risk score; load-test accounts suppress alerts outright (this is the
+# mechanism the false-positive test cases exercise).
+service_accounts:
+  - ci-deploy@example.com
+  - svc-*
+  - "*$"
+
+load_test_accounts:
+  - loadtest@example.com
+  - perf-runner

@@ -1,0 +1,71 @@
+rule: sf-cloud-0002
+tests:
+  - name: stopping a trail fires as critical
+    kind: positive
+    expect: alert
+    expect_min_risk: 70
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: StopLogging
+          eventSource: cloudtrail.amazonaws.com
+          awsRegion: us-east-1
+          sourceIPAddress: 185.220.101.7
+          userIdentity: {type: IAMUser, userName: alex, accountId: "123456789012"}
+          requestParameters: {name: arn:aws:cloudtrail:us-east-1:123456789012:trail/org-trail}
+          eventID: e-trail-1
+          readOnly: false
+
+  - name: deleting a trail fires
+    kind: positive
+    expect: alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: DeleteTrail
+          eventSource: cloudtrail.amazonaws.com
+          sourceIPAddress: 185.220.101.7
+          userIdentity: {type: IAMUser, userName: alex, accountId: "123456789012"}
+          requestParameters: {name: org-trail}
+          eventID: e-trail-2
+          readOnly: false
+
+  - name: describing trails does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: DescribeTrails
+          eventSource: cloudtrail.amazonaws.com
+          sourceIPAddress: 10.0.4.82
+          userIdentity: {type: IAMUser, userName: dana, accountId: "123456789012"}
+          eventID: e-trail-3
+          readOnly: true
+
+  - name: starting logging does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: StartLogging
+          eventSource: cloudtrail.amazonaws.com
+          sourceIPAddress: 10.0.4.82
+          userIdentity: {type: IAMUser, userName: dana, accountId: "123456789012"}
+          eventID: e-trail-4
+          readOnly: false
+
+  - name: a denied StopLogging attempt is filtered
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: StopLogging
+          eventSource: cloudtrail.amazonaws.com
+          sourceIPAddress: 10.0.4.82
+          userIdentity: {type: IAMUser, userName: alex, accountId: "123456789012"}
+          errorCode: AccessDenied
+          errorMessage: not authorized to perform cloudtrail:StopLogging
+          eventID: e-trail-5

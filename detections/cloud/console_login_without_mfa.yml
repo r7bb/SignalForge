@@ -1,0 +1,39 @@
+title: Cloud Console Login Without MFA
+id: sf-cloud-0001
+name: cloud_console_login_no_mfa
+status: test
+description: |
+  A successful cloud console sign-in where no second factor was used. Expected
+  for a break-glass account under change control, suspicious for anyone else -
+  and the cheapest signal that a stolen password is being used directly.
+author: SignalForge
+date: 2026/04/16
+references:
+  - https://attack.mitre.org/techniques/T1078/004/
+logsource:
+  category: authentication
+  product: aws
+detection:
+  selection:
+    api.operation: ConsoleLogin
+    status: Success
+    is_mfa: false
+  filter_federated:
+    logon_type: SAML
+  condition: selection and not filter_federated
+fields:
+  - actor.user.name
+  - src_endpoint.ip
+  - device.region
+falsepositives:
+  - Break-glass root access exercised during an approved change window
+  - A federated sign-in whose MFA state is asserted by the identity provider
+level: medium
+tags:
+  - attack.initial_access
+  - attack.t1078
+  - attack.t1078.004
+signalforge:
+  confidence: 9
+  context_modifiers:
+    privileged_target: 1.15

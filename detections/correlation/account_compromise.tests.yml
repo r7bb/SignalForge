@@ -1,0 +1,139 @@
+rule: sf-corr-0003
+tests:
+  - name: the full four-stage chain across three sources correlates
+    kind: positive
+    expect: correlation
+    expect_min_risk: 70
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 10
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 570{i} ssh2"
+      - source: linux.sshd
+        at: 120
+        raw: "{time} web-01 sshd[80]: Accepted password for alex from 10.0.4.82 port 55240 ssh2"
+      - source: app.audit
+        at: 180
+        payload:
+          action: role_change
+          user: alex@example.com
+          target_user: alex@example.com
+          previous_role: member
+          new_role: admin
+          ip: 10.0.4.82
+          session_id: s-77
+      - source: aws.cloudtrail
+        at: 240
+        payload:
+          eventName: CreateAccessKey
+          eventSource: iam.amazonaws.com
+          awsRegion: us-east-1
+          sourceIPAddress: 10.0.4.82
+          userIdentity: {type: IAMUser, userName: alex, accountId: "123456789012"}
+          requestParameters: {userName: alex}
+          responseElements: {accessKey: {accessKeyId: AKIAEXAMPLE}}
+          eventID: e-chain-1
+          readOnly: false
+
+  - name: three of four stages do not correlate
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 10
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 571{i} ssh2"
+      - source: linux.sshd
+        at: 120
+        raw: "{time} web-01 sshd[81]: Accepted password for alex from 10.0.4.82 port 55241 ssh2"
+      - source: app.audit
+        at: 180
+        payload:
+          action: role_change
+          user: alex@example.com
+          target_user: alex@example.com
+          new_role: admin
+          ip: 10.0.4.82
+
+  - name: the credential creation arriving before the escalation breaks the order
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 10
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 572{i} ssh2"
+      - source: linux.sshd
+        at: 120
+        raw: "{time} web-01 sshd[82]: Accepted password for alex from 10.0.4.82 port 55242 ssh2"
+      - source: app.audit
+        at: 150
+        payload:
+          action: api_key_created
+          user: alex@example.com
+          token_id: tok_early
+          ip: 10.0.4.82
+      - source: app.audit
+        at: 200
+        payload:
+          action: role_change
+          user: alex@example.com
+          target_user: alex@example.com
+          new_role: admin
+          ip: 10.0.4.82
+
+  - name: stages spread over an hour fall outside the fifteen minute window
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 10
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 573{i} ssh2"
+      - source: linux.sshd
+        at: 120
+        raw: "{time} web-01 sshd[83]: Accepted password for alex from 10.0.4.82 port 55243 ssh2"
+      - source: app.audit
+        at: 1800
+        payload:
+          action: role_change
+          user: alex@example.com
+          target_user: alex@example.com
+          new_role: admin
+          ip: 10.0.4.82
+      - source: app.audit
+        at: 3600
+        payload:
+          action: api_key_created
+          user: alex@example.com
+          token_id: tok_late
+          ip: 10.0.4.82
+
+  - name: onboarding automation does not produce the chain
+    kind: false_positive
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 10
+        raw: "{time} web-01 sshd[{i}]: Failed password for ci-deploy from 10.0.0.30 port 574{i} ssh2"
+      - source: linux.sshd
+        at: 120
+        raw: "{time} web-01 sshd[84]: Accepted publickey for ci-deploy from 10.0.0.30 port 55244 ssh2"
+      - source: app.audit
+        at: 180
+        payload:
+          action: role_change
+          user: ci-deploy@example.com
+          target_user: newstarter@example.com
+          new_role: admin
+          is_service_account: true
+          ip: 10.0.0.30
+      - source: app.audit
+        at: 240
+        payload:
+          action: api_key_created
+          user: ci-deploy@example.com
+          is_service_account: true
+          token_id: tok_ci
+          ip: 10.0.0.30

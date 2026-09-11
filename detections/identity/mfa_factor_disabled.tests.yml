@@ -1,0 +1,62 @@
+rule: sf-idn-0002
+tests:
+  - name: identity provider factor deactivation fires
+    kind: positive
+    expect: alert
+    expect_min_risk: 50
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.mfa.factor.deactivate
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          target: [{type: User, alternateId: alex@example.com, id: u2}]
+          client: {ipAddress: 185.220.101.7, geographicalContext: {country: NL}}
+
+  - name: cloud MFA device deactivation fires
+    kind: positive
+    expect: alert
+    events:
+      - source: aws.cloudtrail
+        payload:
+          eventName: DeactivateMFADevice
+          eventSource: iam.amazonaws.com
+          awsRegion: us-east-1
+          sourceIPAddress: 185.220.101.7
+          userIdentity: {type: IAMUser, userName: alex, accountId: "123456789012"}
+          requestParameters: {userName: alex}
+          eventID: e-mfa-1
+          readOnly: false
+
+  - name: factor enrolment does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.mfa.factor.activate
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          target: [{type: User, alternateId: alex@example.com, id: u2}]
+
+  - name: password change does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: app.audit
+        payload:
+          action: password_change
+          user: alex@example.com
+          ip: 10.0.4.82
+
+  - name: help-desk automation is filtered
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: app.audit
+        payload:
+          action: mfa_disabled
+          user: ci-deploy@example.com
+          target_user: dana@example.com
+          is_service_account: true
+          ip: 10.0.0.30

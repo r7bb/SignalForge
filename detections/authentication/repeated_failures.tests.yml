@@ -1,0 +1,76 @@
+# Detection tests for sf-auth-0001.  Executed by tests/detections/test_detections.py:
+# every rule must ship a positive, a negative and a false-positive case.
+rule: sf-auth-0001
+tests:
+  - name: ten failures in thirty seconds fires
+    kind: positive
+    expect: alert
+    expect_min_risk: 30
+    events:
+      - source: linux.sshd
+        repeat: 10
+        interval_seconds: 3
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 552{i} ssh2"
+
+  - name: exactly five failures in five minutes fires at the threshold
+    kind: positive
+    expect: alert
+    events:
+      - source: linux.sshd
+        repeat: 5
+        interval_seconds: 50
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 553{i} ssh2"
+
+  - name: two failures in an hour does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        repeat: 2
+        interval_seconds: 1800
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 554{i} ssh2"
+
+  - name: four failures stays below the threshold
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        repeat: 4
+        interval_seconds: 10
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 555{i} ssh2"
+
+  - name: successful logons are not failures
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        repeat: 8
+        interval_seconds: 5
+        raw: "{time} web-01 sshd[{i}]: Accepted password for alex from 10.0.4.82 port 556{i} ssh2"
+
+  - name: failures spread across ten minutes fall outside the window
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 120
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 557{i} ssh2"
+
+  - name: authorized load-test account is suppressed
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        repeat: 12
+        interval_seconds: 2
+        raw: "{time} web-01 sshd[{i}]: Failed password for loadtest from 10.0.9.11 port 558{i} ssh2"
+
+  - name: machine account trailing dollar is filtered by the rule
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        repeat: 12
+        interval_seconds: 2
+        raw: "{time} web-01 sshd[{i}]: Failed password for backup$ from 10.0.9.12 port 559{i} ssh2"

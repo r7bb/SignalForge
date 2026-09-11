@@ -1,0 +1,31 @@
+title: Suspicious Authentication Sequence
+id: sf-corr-0001
+name: auth_bruteforce_then_success
+status: test
+description: |
+  A burst of authentication failures for one principal followed by a success
+  inside ten minutes - the classic "they finally guessed it" shape. Ordered
+  correlation, so a success *before* the failures does not fire.
+author: SignalForge
+date: 2026/04/18
+correlation:
+  type: temporal_ordered
+  rules:
+    - auth_repeated_failures
+    - auth_logon_success
+  group-by:
+    - actor.user.name
+  timespan: 10m
+falsepositives:
+  - A user who forgot their password and then reset it successfully
+  - Credential rotation on an automation account
+level: high
+tags:
+  - attack.credential_access
+  - attack.initial_access
+  - attack.t1110.001
+  - attack.t1078
+signalforge:
+  confidence: 8
+  scenario: suspicious_auth_sequence
+  response_playbook: revoke_sessions

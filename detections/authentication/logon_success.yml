@@ -1,0 +1,34 @@
+title: Successful Interactive Logon
+id: sf-auth-0002
+name: auth_logon_success
+status: test
+description: |
+  Building block: any successful interactive logon. Informational on its own -
+  it exists so the correlation rules can express "a success that follows a
+  burst of failures" and "the same account signing in from two countries".
+author: SignalForge
+date: 2026/04/12
+logsource:
+  category: authentication
+detection:
+  selection:
+    class_uid: 3002
+    activity_id: 1
+    status: Success
+  filter_service_logons:
+    logon_type: Service
+  condition: selection and not filter_service_logons
+fields:
+  - actor.user.name
+  - src_endpoint.ip
+  - logon_type
+falsepositives:
+  - Expected day-to-day sign-ins; this rule is a correlation building block
+level: informational
+tags:
+  - attack.initial_access
+  - attack.t1078
+signalforge:
+  confidence: 9
+  tuning:
+    building_block: true

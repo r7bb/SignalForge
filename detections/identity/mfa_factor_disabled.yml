@@ -1,0 +1,35 @@
+title: MFA Factor Disabled
+id: sf-idn-0002
+name: mfa_factor_disabled
+status: test
+description: |
+  A multi-factor authentication factor was deactivated for an account. A common
+  persistence and defence-evasion step once an attacker holds valid credentials.
+author: SignalForge
+date: 2026/04/14
+references:
+  - https://attack.mitre.org/techniques/T1556/006/
+logsource:
+  category: iam
+detection:
+  selection:
+    class_uid: 3001
+    activity_id: 11
+  filter_automation:
+    actor.user.type: Service
+  condition: selection and not filter_automation
+fields:
+  - actor.user.name
+  - user.name
+falsepositives:
+  - Help-desk resetting a lost hardware token
+  - A user replacing a phone and re-enrolling immediately afterwards
+level: high
+tags:
+  - attack.defense_evasion
+  - attack.persistence
+  - attack.t1556
+  - attack.t1556.006
+signalforge:
+  confidence: 9
+  response_playbook: revoke_sessions

@@ -1,0 +1,45 @@
+title: Unusual Access to Critical Data
+id: sf-app-0001
+name: sensitive_data_access
+status: test
+description: |
+  A read or export against a resource the asset inventory marks critical
+  (customer records, payment data, secret stores), or any read of at least a
+  thousand records. Routine for the handful of services that own that data;
+  notable for a human account, and the last stage of the account-compromise
+  chain.
+author: SignalForge
+date: 2026/04/19
+references:
+  - https://attack.mitre.org/techniques/T1530/
+logsource:
+  category: datastore
+detection:
+  selection_read:
+    class_uid: 6005
+    activity_id:
+      - 1
+      - 4
+  trigger_critical_resource:
+    resources.criticality: critical
+  trigger_export_volume:
+    unmapped.record_count|gte: 1000
+  filter_owning_service:
+    actor.user.type: Service
+  condition: selection_read and 1 of trigger_* and not filter_owning_service
+fields:
+  - actor.user.name
+  - resources.name
+  - unmapped.record_count
+falsepositives:
+  - The service account that owns the datastore performing its normal reads
+  - An analyst running an approved data-subject access request
+  - Scheduled reporting jobs that export large result sets
+level: medium
+tags:
+  - attack.collection
+  - attack.exfiltration
+  - attack.t1530
+signalforge:
+  confidence: 7
+  dedup_by: [actor.user.name, resources.name]

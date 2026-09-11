@@ -1,0 +1,67 @@
+rule: sf-app-0001
+tests:
+  - name: human account reading critical customer data fires
+    kind: positive
+    expect: alert
+    expect_min_risk: 40
+    events:
+      - source: app.audit
+        payload:
+          action: data_access
+          user: alex@example.com
+          ip: 10.0.4.82
+          session_id: s-77
+          resource: customer-records
+          resource_type: datastore
+          resource_criticality: critical
+          data_classification: pii
+          record_count: 12
+
+  - name: a large export fires on volume alone
+    kind: positive
+    expect: alert
+    events:
+      - source: app.audit
+        payload:
+          action: data_export
+          user: alex@example.com
+          ip: 10.0.4.82
+          resource: billing-export
+          resource_criticality: high
+          record_count: 48000
+
+  - name: reading a low-criticality resource does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: app.audit
+        payload:
+          action: data_access
+          user: alex@example.com
+          resource: internal-wiki
+          resource_criticality: low
+          record_count: 3
+
+  - name: writing to a critical resource is not a read
+    kind: negative
+    expect: no_alert
+    events:
+      - source: app.audit
+        payload:
+          action: data_delete
+          user: dana@example.com
+          resource: customer-records
+          resource_criticality: critical
+
+  - name: the owning service account is filtered
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: app.audit
+        payload:
+          action: data_access
+          user: ci-deploy@example.com
+          is_service_account: true
+          resource: customer-records
+          resource_criticality: critical
+          record_count: 25000

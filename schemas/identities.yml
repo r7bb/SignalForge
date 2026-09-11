@@ -1,0 +1,27 @@
+# Identity resolution map: canonical email -> the aliases each source emits.
+# Used during normalization so `alex` (sshd), `alex@example.com` (app audit log)
+# and `AIDAEXAMPLEALEX` (CloudTrail) correlate as one principal.
+identities:
+  alex@example.com:
+    display_name: Alex Rivera
+    uid: AIDAEXAMPLEALEX
+    department: platform-engineering
+    aliases: [alex, arivera, alex.rivera]
+  dana@example.com:
+    display_name: Dana Okafor
+    uid: AIDAEXAMPLEDANA
+    department: security
+    criticality: high
+    aliases: [dana, dokafor]
+  root@example.com:
+    display_name: Break-glass Administrator
+    criticality: critical
+    aliases: [root, admin, administrator]
+  ci-deploy@example.com:
+    display_name: CI Deploy Robot
+    service_account: true
+    aliases: [ci-deploy, svc-ci, jenkins]
+  loadtest@example.com:
+    display_name: Load Test Harness
+    service_account: true
+    aliases: [loadtest, perf-runner]

@@ -1,0 +1,45 @@
+title: Potential Account Compromise
+id: sf-corr-0003
+name: account_compromise
+status: test
+description: |
+  The full compromise shape, in order, for one principal inside fifteen
+  minutes: a burst of authentication failures, a success, a privilege grant,
+  and then a new long-lived credential. Each stage on its own is a medium or
+  high alert; together they are an incident, and the risk model scores them as
+  a chain rather than as four unrelated findings.
+
+  Stages come from different log sources (sshd, the application audit log,
+  CloudTrail), so this only holds together because normalization resolves the
+  principal to one identity.
+author: SignalForge
+date: 2026/04/22
+modified: 2026/09/10
+correlation:
+  type: temporal_ordered
+  rules:
+    - auth_repeated_failures
+    - auth_logon_success
+    - privilege_grant
+    - credential_created
+  group-by:
+    - actor.user.name
+  timespan: 15m
+falsepositives:
+  - A new starter whose first sign-in, role assignment and token issue happen
+    back-to-back during onboarding
+  - An engineer recovering their own account after a password reset
+level: critical
+tags:
+  - attack.credential_access
+  - attack.initial_access
+  - attack.privilege_escalation
+  - attack.persistence
+  - attack.t1110.001
+  - attack.t1078
+  - attack.t1098.003
+  - attack.t1098.001
+signalforge:
+  confidence: 9
+  scenario: account_compromise
+  response_playbook: contain_account

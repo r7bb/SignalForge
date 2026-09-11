@@ -1,0 +1,54 @@
+rule: sf-auth-0002
+tests:
+  - name: successful ssh logon fires the building block
+    kind: positive
+    expect: alert
+    events:
+      - source: linux.sshd
+        raw: "{time} web-01 sshd[2312]: Accepted password for alex from 10.0.4.82 port 55240 ssh2"
+
+  - name: successful application logon fires
+    kind: positive
+    expect: alert
+    events:
+      - source: app.audit
+        payload:
+          action: login
+          user: alex@example.com
+          ip: 10.0.4.82
+          session_id: s-77
+          mfa_used: true
+
+  - name: failed logon does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        raw: "{time} web-01 sshd[2311]: Failed password for alex from 10.0.4.82 port 55212 ssh2"
+
+  - name: logoff does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        raw: "{time} web-01 sshd[2313]: pam_unix(sshd:session): session closed for user alex"
+
+  - name: service logons are filtered by the rule
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: app.audit
+        payload:
+          action: login
+          user: svc-backup
+          ip: 10.0.0.30
+          logon_type: Service
+
+  - name: load-test harness sign-ins are suppressed by context
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: linux.sshd
+        repeat: 5
+        interval_seconds: 2
+        raw: "{time} web-01 sshd[{i}]: Accepted password for loadtest from 10.0.9.11 port 560{i} ssh2"

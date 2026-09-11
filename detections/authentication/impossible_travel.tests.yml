@@ -1,0 +1,89 @@
+rule: sf-corr-0002
+tests:
+  - name: two countries within the hour correlate
+    kind: positive
+    expect: correlation
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          client:
+            ipAddress: 203.0.113.24
+            geographicalContext: {country: US, city: Boston}
+      - source: okta.system
+        at: 1200
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          client:
+            ipAddress: 185.220.101.7
+            geographicalContext: {country: NL, city: Amsterdam}
+
+  - name: repeated sign-ins from one country do not correlate
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          client:
+            ipAddress: 203.0.113.24
+            geographicalContext: {country: US, city: Boston}
+      - source: okta.system
+        at: 900
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          client:
+            ipAddress: 203.0.113.99
+            geographicalContext: {country: US, city: New York}
+
+  - name: two countries for two different users do not correlate
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          client:
+            ipAddress: 203.0.113.24
+            geographicalContext: {country: US, city: Boston}
+      - source: okta.system
+        at: 600
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: dana@example.com, id: a2, type: User}
+          client:
+            ipAddress: 185.220.101.7
+            geographicalContext: {country: NL, city: Amsterdam}
+
+  - name: load-test harness sign-ins are suppressed before correlation
+    kind: false_positive
+    expect: no_correlation
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: loadtest@example.com, id: a9, type: User}
+          client:
+            ipAddress: 203.0.113.10
+            geographicalContext: {country: US, city: Boston}
+      - source: okta.system
+        at: 600
+        payload:
+          eventType: user.session.start
+          outcome: {result: SUCCESS}
+          actor: {alternateId: loadtest@example.com, id: a9, type: User}
+          client:
+            ipAddress: 198.51.100.10
+            geographicalContext: {country: DE, city: Frankfurt}

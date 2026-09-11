@@ -1,0 +1,41 @@
+title: Local Credential Store Accessed
+id: sf-end-0001
+name: endpoint_shadow_access
+status: test
+description: |
+  A process read one of the local credential stores (/etc/shadow, /etc/sudoers,
+  root's SSH keys), typically via sudo. This is OS credential dumping in its
+  simplest form.
+author: SignalForge
+date: 2026/04/17
+references:
+  - https://attack.mitre.org/techniques/T1003/008/
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection_command:
+    actor.process.cmd_line|contains:
+      - /etc/shadow
+      - /etc/sudoers
+      - /root/.ssh/
+  filter_backup_agent:
+    actor.process.name|endswith:
+      - /usr/sbin/backup-agent
+      - /usr/lib/aide/aide
+  condition: selection_command and not filter_backup_agent
+fields:
+  - actor.user.name
+  - actor.process.cmd_line
+  - device.hostname
+falsepositives:
+  - Backup and file-integrity agents that read the whole of /etc
+  - A configuration-management run validating sudoers syntax
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1003
+  - attack.t1003.008
+signalforge:
+  confidence: 8
+  dedup_by: [actor.user.name, device.hostname]

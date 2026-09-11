@@ -1,0 +1,41 @@
+title: Repeated Authentication Failures
+id: sf-auth-0001
+name: auth_repeated_failures
+status: test
+description: |
+  Five or more failed authentications for the same principal within five
+  minutes. On its own this is routine noise; it matters as the first stage of
+  the account-compromise correlation, which is why the level is medium.
+author: SignalForge
+date: 2026/04/12
+modified: 2026/09/10
+references:
+  - https://attack.mitre.org/techniques/T1110/001/
+logsource:
+  category: authentication
+detection:
+  selection:
+    class_uid: 3002
+    activity_id: 1
+    status: Failure
+  filter_machine_accounts:
+    actor.user.name|endswith: '$'
+  timeframe: 5m
+  condition: selection and not filter_machine_accounts | count() by actor.user.name >= 5
+fields:
+  - actor.user.name
+  - src_endpoint.ip
+  - device.hostname
+falsepositives:
+  - Load-test and performance harness accounts
+  - A user whose saved credentials expired after a password rotation
+  - Monitoring probes authenticating with a stale secret
+level: medium
+tags:
+  - attack.credential_access
+  - attack.t1110
+  - attack.t1110.001
+signalforge:
+  confidence: 8
+  dedup_by: [actor.user.name, src_endpoint.ip]
+  suppress: 5m

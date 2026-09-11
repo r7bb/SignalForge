@@ -1,0 +1,31 @@
+title: Impossible Travel - One Account, Two Countries
+id: sf-corr-0002
+name: auth_impossible_travel
+status: test
+description: |
+  The same principal signs in successfully from two or more distinct countries
+  within an hour. Expressed as a value_count correlation over the successful
+  logon building block, so it works for any source that carries geolocation.
+author: SignalForge
+date: 2026/04/20
+correlation:
+  type: value_count
+  rules:
+    - auth_logon_success
+  group-by:
+    - actor.user.name
+  timespan: 1h
+  condition:
+    gte: 2
+    field: src_endpoint.location.country
+falsepositives:
+  - VPN or corporate egress that terminates in another country
+  - Travelling staff whose session resumes after landing
+  - Geolocation databases mis-attributing a mobile carrier range
+level: high
+tags:
+  - attack.initial_access
+  - attack.t1078.004
+signalforge:
+  confidence: 6
+  scenario: impossible_travel

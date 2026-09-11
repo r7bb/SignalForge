@@ -1,0 +1,77 @@
+rule: sf-idn-0001
+tests:
+  - name: identity provider privilege grant fires
+    kind: positive
+    expect: alert
+    expect_min_risk: 50
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.account.privilege.grant
+          outcome: {result: SUCCESS}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          target: [{type: User, alternateId: alex@example.com, id: u2}]
+          client: {ipAddress: 10.0.4.82}
+          debugContext: {debugData: {privilegeGranted: Super administrator}}
+
+  - name: application role change to admin fires
+    kind: positive
+    expect: alert
+    events:
+      - source: app.audit
+        payload:
+          action: role_change
+          user: alex@example.com
+          target_user: alex@example.com
+          previous_role: member
+          new_role: admin
+          ip: 10.0.4.82
+
+  - name: linux privileged group membership fires
+    kind: positive
+    expect: alert
+    events:
+      - source: linux.usermod
+        raw: "{time} web-01 usermod[9001]: add 'alex' to group 'sudo'"
+
+  - name: privilege revocation does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.account.privilege.revoke
+          outcome: {result: SUCCESS}
+          actor: {alternateId: dana@example.com, id: a2, type: User}
+          target: [{type: User, alternateId: alex@example.com, id: u2}]
+
+  - name: failed grant attempt does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: okta.system
+        payload:
+          eventType: user.account.privilege.grant
+          outcome: {result: FAILURE, reason: insufficient permissions}
+          actor: {alternateId: alex@example.com, id: a1, type: User}
+          target: [{type: User, alternateId: alex@example.com, id: u2}]
+
+  - name: non-privileged group membership does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.usermod
+        raw: "{time} web-01 usermod[9002]: add 'alex' to group 'developers'"
+
+  - name: automation service account grants are filtered
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: app.audit
+        payload:
+          action: role_change
+          user: ci-deploy@example.com
+          target_user: dana@example.com
+          new_role: admin
+          is_service_account: true
+          ip: 10.0.0.30

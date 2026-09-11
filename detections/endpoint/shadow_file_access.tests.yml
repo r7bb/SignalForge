@@ -1,0 +1,60 @@
+rule: sf-end-0001
+tests:
+  - name: sudo cat of the shadow file fires
+    kind: positive
+    expect: alert
+    expect_min_risk: 50
+    events:
+      - source: linux.sudo
+        raw: "{time} web-01 sudo: alex : TTY=pts/0 ; PWD=/home/alex ; USER=root ; COMMAND=/usr/bin/cat /etc/shadow"
+
+  - name: reading root's ssh keys fires
+    kind: positive
+    expect: alert
+    events:
+      - source: linux.sudo
+        raw: "{time} web-01 sudo: alex : TTY=pts/0 ; PWD=/home/alex ; USER=root ; COMMAND=/bin/cp /root/.ssh/id_ed25519 /tmp/k"
+
+  - name: editing sudoers fires
+    kind: positive
+    expect: alert
+    events:
+      - source: linux.auditd
+        payload:
+          audit_type: EXECVE
+          exe: /usr/bin/vim
+          cmdline: /usr/bin/vim /etc/sudoers
+          auid_name: alex
+          pid: 4410
+          success: "yes"
+
+  - name: an unrelated sudo command does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.sudo
+        raw: "{time} web-01 sudo: alex : TTY=pts/0 ; PWD=/home/alex ; USER=root ; COMMAND=/usr/bin/cat /etc/hosts"
+
+  - name: reading a user's own dotfile does not fire
+    kind: negative
+    expect: no_alert
+    events:
+      - source: linux.auditd
+        payload:
+          audit_type: EXECVE
+          exe: /usr/bin/cat
+          cmdline: /usr/bin/cat /home/alex/.bashrc
+          auid_name: alex
+          pid: 4411
+
+  - name: file-integrity agent reading /etc is filtered
+    kind: false_positive
+    expect: no_alert
+    events:
+      - source: linux.auditd
+        payload:
+          audit_type: EXECVE
+          exe: /usr/sbin/backup-agent
+          cmdline: /usr/sbin/backup-agent --archive /etc/shadow /etc/sudoers
+          auid_name: root
+          pid: 5001

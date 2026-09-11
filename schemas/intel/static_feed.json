@@ -1,0 +1,78 @@
+{
+  "_comment": [
+    "Deterministic threat-intelligence feed for the SignalForge lab and test suite.",
+    "These are documentation/test ranges (RFC 5737, RFC 3849) plus a small number of",
+    "public Tor exit ranges, so nothing here depends on scraping a third-party feed.",
+    "Point SIGNALFORGE_INTEL_HTTP_URL at a provider you are authorised to query to",
+    "layer live data on top of this file."
+  ],
+  "version": "2026.09.01",
+  "source": "signalforge-lab-static-feed",
+  "indicators": {
+    "203.0.113.66": {
+      "verdict": "malicious",
+      "score": 92,
+      "categories": ["credential-stuffing", "brute-force"],
+      "asn": 64500,
+      "asn_org": "EXAMPLE-LAB-AS",
+      "country": "US",
+      "first_seen": "2026-06-14T00:00:00Z",
+      "last_seen": "2026-09-08T00:00:00Z",
+      "references": ["https://example.org/lab-feed/203.0.113.66"]
+    },
+    "198.51.100.23": {
+      "verdict": "suspicious",
+      "score": 61,
+      "categories": ["scanning"],
+      "asn": 64501,
+      "asn_org": "EXAMPLE-SCANNER-AS",
+      "country": "DE",
+      "first_seen": "2026-08-02T00:00:00Z",
+      "last_seen": "2026-09-09T00:00:00Z"
+    },
+    "2001:db8:dead:beef::1": {
+      "verdict": "malicious",
+      "score": 88,
+      "categories": ["c2"],
+      "country": "NL"
+    },
+    "login-verify-example.com": {
+      "verdict": "malicious",
+      "score": 95,
+      "categories": ["phishing"],
+      "first_seen": "2026-09-01T00:00:00Z"
+    },
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": {
+      "verdict": "benign",
+      "score": 0,
+      "categories": ["empty-file"]
+    },
+    "9f2feb0f6a3b1e0b0c17b2a8d5b9e6a1c4d8f3e2a7b6c5d4e3f2a1b0c9d8e7f6": {
+      "verdict": "malicious",
+      "score": 90,
+      "categories": ["credential-dumper"],
+      "references": ["https://example.org/lab-feed/sample-hash"]
+    }
+  },
+  "networks": {
+    "185.220.101.0/24": {
+      "verdict": "anonymizer",
+      "score": 55,
+      "categories": ["tor-exit"],
+      "asn": 204915,
+      "asn_org": "EXAMPLE-TOR-EXIT",
+      "country": "NL",
+      "first_seen": "2025-11-20T00:00:00Z",
+      "last_seen": "2026-09-09T00:00:00Z",
+      "references": ["https://metrics.torproject.org/"]
+    },
+    "192.0.2.0/24": {
+      "verdict": "suspicious",
+      "score": 45,
+      "categories": ["bulletproof-hosting"],
+      "asn": 64502,
+      "asn_org": "EXAMPLE-BPH-AS",
+      "country": "SC"
+    }
+  }
+}

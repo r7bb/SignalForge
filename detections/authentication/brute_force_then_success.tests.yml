@@ -1,0 +1,74 @@
+rule: sf-corr-0001
+tests:
+  - name: failures then a success correlate
+    kind: positive
+    expect: correlation
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 5
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 561{i} ssh2"
+      - source: linux.sshd
+        at: 60
+        raw: "{time} web-01 sshd[99]: Accepted password for alex from 10.0.4.82 port 55240 ssh2"
+
+  - name: failures then a success from another source still correlate
+    kind: positive
+    expect: correlation
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 5
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 562{i} ssh2"
+      - source: app.audit
+        at: 90
+        payload:
+          action: login
+          user: alex@example.com
+          ip: 10.0.4.82
+          session_id: s-91
+
+  - name: a success before the failures does not correlate
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        raw: "{time} web-01 sshd[10]: Accepted password for alex from 10.0.4.82 port 55201 ssh2"
+      - source: linux.sshd
+        at: 60
+        repeat: 6
+        interval_seconds: 5
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 563{i} ssh2"
+
+  - name: failures with no success do not correlate
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        repeat: 8
+        interval_seconds: 5
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 564{i} ssh2"
+
+  - name: failures for one user and a success for another do not correlate
+    kind: negative
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        repeat: 6
+        interval_seconds: 5
+        raw: "{time} web-01 sshd[{i}]: Failed password for alex from 10.0.4.82 port 565{i} ssh2"
+      - source: linux.sshd
+        at: 60
+        raw: "{time} web-01 sshd[98]: Accepted password for dana from 10.0.5.20 port 55301 ssh2"
+
+  - name: load-test harness never reaches the chain
+    kind: false_positive
+    expect: no_correlation
+    events:
+      - source: linux.sshd
+        repeat: 10
+        interval_seconds: 3
+        raw: "{time} web-01 sshd[{i}]: Failed password for loadtest from 10.0.9.11 port 566{i} ssh2"
+      - source: linux.sshd
+        at: 60
+        raw: "{time} web-01 sshd[97]: Accepted password for loadtest from 10.0.9.11 port 55401 ssh2"
