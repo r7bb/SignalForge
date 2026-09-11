@@ -1,0 +1,1 @@
+"""Detection-as-code tests."""
