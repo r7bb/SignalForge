@@ -1,5 +1,7 @@
 "use client";
 
+import type { CSSProperties } from "react";
+
 import { riskBand, riskIcon } from "@/lib/format";
 
 interface Props {
@@ -16,6 +18,9 @@ interface Props {
 export function RiskMeter({ score, showScale = true, label = "Risk score" }: Props) {
   const clamped = Math.max(0, Math.min(100, score));
   const band = riskBand(clamped);
+  // The fill width is driven by a CSS custom property, which is not part of
+  // the CSSProperties type - hence the cast.
+  const trackStyle = { "--meter-value": `${clamped}%` } as CSSProperties;
 
   return (
     <div>
@@ -32,7 +37,7 @@ export function RiskMeter({ score, showScale = true, label = "Risk score" }: Pro
       </div>
       <div
         className="meter"
-        style={{ ["--meter-value" as string]: `${clamped}%` }}
+        style={trackStyle}
         role="meter"
         aria-valuenow={clamped}
         aria-valuemin={0}

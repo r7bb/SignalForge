@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 
 import { Shell } from "@/components/Shell";
 
@@ -10,7 +11,7 @@ export const metadata: Metadata = {
     "Cloud-native detection & response: OCSF normalization, Sigma detections, behavioural correlation and incident case management.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>

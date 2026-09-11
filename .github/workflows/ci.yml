@@ -80,15 +80,15 @@ jobs:
         working-directory: apps/dashboard
     steps:
       - uses: actions/checkout@v4
-      # No npm cache here: caching requires a committed package-lock.json, and
-      # setup-node fails outright when the lock file it is pointed at is
-      # missing. Commit a lock file (npm install locally), then switch this to
-      # `cache: npm` plus `npm ci` for faster, reproducible installs.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
       - name: Install
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
       - name: Type check
         run: npm run typecheck
       - name: Lint
@@ -161,6 +161,14 @@ jobs:
         with:
           context: .
           file: infrastructure/docker/Dockerfile.worker
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build dashboard image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.dashboard
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

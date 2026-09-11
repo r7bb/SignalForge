@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { riskColor, riskIcon, statusLabel } from "@/lib/format";
 
 interface SeverityBadgeProps {
@@ -57,7 +59,7 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export function Tag({ children, title }: { children: React.ReactNode; title?: string }) {
+export function Tag({ children, title }: { children: ReactNode; title?: string }) {
   return (
     <span className="badge" title={title}>
       {children}
