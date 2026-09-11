@@ -1,0 +1,1 @@
+"""Correlator service: alerts -> incidents."""
