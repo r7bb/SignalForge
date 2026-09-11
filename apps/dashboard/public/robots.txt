@@ -1,0 +1,3 @@
+# The analyst console is not a public site.
+User-agent: *
+Disallow: /

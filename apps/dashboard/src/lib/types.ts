@@ -1,0 +1,249 @@
+/** API response shapes (mirrors apps/api/app/schemas.py). */
+
+export type RiskLevel = "informational" | "low" | "medium" | "high" | "critical";
+
+export interface AttackTactic {
+  slug: string;
+  id: string;
+  name: string;
+}
+
+export interface AttackTechnique {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface AlertSummary {
+  alert_id: string;
+  rule_id: string;
+  rule_title: string;
+  rule_level: string;
+  status: string;
+  risk_score: number;
+  risk_level: RiskLevel;
+  principal?: string | null;
+  source_ip?: string | null;
+  hostname?: string | null;
+  occurrences: number;
+  first_seen: string;
+  last_seen: string;
+  tactics: string[];
+  techniques: string[];
+  incident_id?: string | null;
+}
+
+export interface IncidentSummary {
+  incident_id: string;
+  key: string;
+  title: string;
+  status: string;
+  severity: RiskLevel;
+  owner?: string | null;
+  risk_score: number;
+  risk_level: RiskLevel;
+  scenario?: string | null;
+  principal?: string | null;
+  source_ips: string[];
+  hostnames: string[];
+  tactics: AttackTactic[];
+  techniques: AttackTechnique[];
+  alert_count: number;
+  evidence_count: number;
+  first_seen: string;
+  last_seen: string;
+  updated_at: string;
+}
+
+export interface TimelineItem {
+  time: string;
+  kind: "event" | "alert" | "response" | "note" | "status";
+  title: string;
+  detail?: string | null;
+  actor?: string | null;
+  source_ip?: string | null;
+  hostname?: string | null;
+  outcome?: string | null;
+  severity?: string | null;
+  class_name?: string | null;
+  event_id?: string | null;
+  alert_id?: string | null;
+  tactics: string[];
+}
+
+export interface ResponseAction {
+  id: string;
+  playbook: string;
+  target?: string | null;
+  status: string;
+  dry_run: boolean;
+  requested_by: string;
+  approved_by?: string | null;
+  rejected_reason?: string | null;
+  executed_at?: string | null;
+  result: { ok?: boolean; message?: string; dry_run?: boolean };
+  created_at: string;
+}
+
+export interface PlaybookOption {
+  name: string;
+  title: string;
+  description: string;
+  target_kind: string;
+  approver_roles: string[];
+  reversible: boolean;
+  suggested_target?: string | null;
+}
+
+export interface IncidentDetail extends IncidentSummary {
+  summary?: string | null;
+  risk_factors: string[];
+  alerts: AlertSummary[];
+  timeline: TimelineItem[];
+  notes: Array<{ id: string; time: string; author: string; body: string }>;
+  audit: Array<{
+    time: string;
+    actor: string;
+    action: string;
+    detail?: string | null;
+    data: Record<string, unknown>;
+  }>;
+  response_actions: ResponseAction[];
+  suggested_playbooks: PlaybookOption[];
+}
+
+export interface Overview {
+  critical_alerts: number;
+  high_alerts: number;
+  events_today: number;
+  open_incidents: number;
+  alerts_total: number;
+  incidents_total: number;
+  mean_detection_latency_ms: number;
+  events_by_class: Record<string, number>;
+  events_by_severity: Record<string, number>;
+  incidents_by_status: Record<string, number>;
+  top_rules: Array<{
+    rule_id: string;
+    rule_title: string;
+    alerts: number;
+    occurrences: number;
+    max_risk: number;
+  }>;
+  supply_chain: {
+    applications?: number;
+    components?: number;
+    open_findings?: number;
+    by_severity?: Record<string, number>;
+    affected_applications?: string[];
+  };
+  generated_at: string;
+}
+
+export interface TacticCoverage {
+  tactic: string;
+  name: string;
+  rules: number;
+  techniques: string[];
+  technique_count: number;
+  incidents: number;
+}
+
+export interface RuleSummary {
+  id: string;
+  name?: string | null;
+  title: string;
+  kind: "detection" | "correlation";
+  level: string;
+  status: string;
+  description?: string | null;
+  author?: string | null;
+  logsource: Record<string, string>;
+  tactics: string[];
+  techniques: string[];
+  falsepositives: string[];
+  stateful: boolean;
+  timeframe_seconds?: number | null;
+  condition?: string | null;
+  correlation_type?: string | null;
+  correlation_rules: string[];
+  source_path?: string | null;
+  revision?: number | null;
+}
+
+export interface LintReport {
+  ok: boolean;
+  rule_count: number;
+  correlation_count: number;
+  tested_rules: number;
+  errors: Array<{ path: string; code: string; message: string; rule_id?: string }>;
+  warnings: Array<{ path: string; code: string; message: string; rule_id?: string }>;
+}
+
+export interface SupplyChainApp {
+  id: string;
+  name: string;
+  environment: string;
+  criticality: string;
+  owner?: string | null;
+  components: number;
+  sbom_format?: string | null;
+  ingested_at?: string | null;
+  open_vulnerabilities: number;
+}
+
+export interface SupplyChainFinding {
+  application: string;
+  criticality: string;
+  vuln_id: string;
+  title?: string | null;
+  severity: string;
+  cvss_score?: number | null;
+  component: string;
+  version: string;
+  purl: string;
+  direct: boolean;
+  fixed_version?: string | null;
+}
+
+export interface VulnerabilityImpact {
+  vuln_id: string;
+  known: boolean;
+  title?: string | null;
+  severity: string;
+  cvss_score?: number | null;
+  package: string;
+  ecosystem?: string | null;
+  affected_range: string;
+  fixed_version?: string | null;
+  references: string[];
+  applications: Array<{
+    application: string;
+    environment: string;
+    criticality: string;
+    owner?: string | null;
+    status: "affected" | "unaffected" | "not_present";
+    findings: Array<{
+      component: string;
+      version: string;
+      purl: string;
+      direct: boolean;
+      affected: boolean;
+      fixed_version?: string | null;
+    }>;
+  }>;
+}
+
+export interface Session {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    tenant: string;
+    full_name?: string | null;
+  };
+}
