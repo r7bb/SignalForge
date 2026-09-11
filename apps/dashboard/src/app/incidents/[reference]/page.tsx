@@ -128,7 +128,7 @@ export default function IncidentPage() {
           <h3 className="card-title">
             {incident.timeline.length} entries around this account, address and host
           </h3>
-          <span className="card-note">ordered by event time</span>
+          <span className="card-note">ordered by event time · newest activity first in the window</span>
         </div>
         <Timeline items={incident.timeline} />
       </div>
@@ -152,6 +152,7 @@ export default function IncidentPage() {
                   <Link href={`/detections/${alert.rule_id}`}>{alert.rule_title}</Link>
                   <div className="muted mono" style={{ fontSize: 11 }}>
                     {alert.rule_id} · {alert.rule_level}
+                    {alert.is_building_block && " · correlation building block"}
                   </div>
                 </td>
                 <td className="num">{alert.risk_score}</td>

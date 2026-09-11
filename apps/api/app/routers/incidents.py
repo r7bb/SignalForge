@@ -91,14 +91,18 @@ async def list_incidents(
 @router.get("/{reference}", response_model=IncidentDetail)
 async def get_incident(
     reference: str,
-    timeline_size: int = Query(default=200, ge=1, le=1000),
+    timeline_size: int = Query(default=40, ge=1, le=1000),
     tenant: str = Depends(tenant_scope),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     """The investigation view: incident, its alerts, timeline, notes and audit."""
     incident = _require(state, tenant, reference)
     alerts = state.incidents.get_alerts(tenant, incident.alert_ids)
-    timeline = state.incidents.build_timeline(tenant, reference, size=timeline_size)
+    # A focused window by default: the incident's own span plus a few minutes
+    # either side. The dedicated /timeline route serves the full history.
+    timeline = state.incidents.build_timeline(
+        tenant, reference, pad_seconds=300, size=timeline_size
+    )
     actions = state.responses.list(tenant, incident_id=incident.incident_id)
 
     suggested = []

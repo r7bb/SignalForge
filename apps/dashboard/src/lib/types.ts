@@ -26,6 +26,7 @@ export interface AlertSummary {
   source_ip?: string | null;
   hostname?: string | null;
   occurrences: number;
+  is_building_block?: boolean;
   first_seen: string;
   last_seen: string;
   tactics: string[];

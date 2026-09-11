@@ -556,6 +556,10 @@ shape of the deployment:
 - **Auth**: JWT access/refresh tokens, PBKDF2-SHA256 password hashing with a
   stored iteration count and transparent rehash on login, and a four-role
   hierarchy (`viewer` < `analyst` < `responder` < `admin`).
+- **Its own dependencies are clean.** `npm audit` reports zero findings for the
+  dashboard (Next pinned to a patched release, `postcss` overridden to the fixed
+  line), and CI fails the build on any high-severity advisory — a project about
+  vulnerability management should not ship with known-vulnerable dependencies.
 - **Known gaps** (see the roadmap): the dashboard keeps its token in
   `sessionStorage` rather than an httpOnly cookie, detection window state is
   per-replica rather than shared, and there is no rate limiting on the API.

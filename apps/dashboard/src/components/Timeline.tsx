@@ -8,6 +8,8 @@ import type { TimelineItem } from "@/lib/types";
 interface Props {
   items: TimelineItem[];
   emptyMessage?: string;
+  /** Rows shown before the "show all" toggle. */
+  initialCount?: number;
 }
 
 /** Kind -> mark colour. Alerts and responses use reserved status colours. */
@@ -43,17 +45,27 @@ function kindLabel(item: TimelineItem): string {
  * *event* time so late-arriving logs land in the right slot. Every row carries
  * its kind as text - the dot colour is a supporting cue, not the only one.
  */
-export function Timeline({ items, emptyMessage = "No activity in this window." }: Props) {
+export function Timeline({
+  items,
+  emptyMessage = "No activity in this window.",
+  initialCount = 25,
+}: Props) {
   const [hover, setHover] = useState<{ x: number; y: number; item: TimelineItem } | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   if (items.length === 0) {
     return <p className="empty">{emptyMessage}</p>;
   }
 
+  // A busy account can touch hundreds of events in the window; showing them
+  // all at once buries the sequence that matters.
+  const visible = expanded ? items : items.slice(0, initialCount);
+  const hidden = items.length - visible.length;
+
   return (
     <>
       <ol className="timeline">
-        {items.map((item, index) => (
+        {visible.map((item, index) => (
           <li
             className="timeline-item"
             key={`${item.time}-${index}`}
@@ -84,6 +96,27 @@ export function Timeline({ items, emptyMessage = "No activity in this window." }
           </li>
         ))}
       </ol>
+
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="chart-toggle"
+          style={{ marginTop: 10 }}
+          onClick={() => setExpanded(true)}
+        >
+          Show {hidden} earlier {hidden === 1 ? "entry" : "entries"}
+        </button>
+      )}
+      {expanded && items.length > initialCount && (
+        <button
+          type="button"
+          className="chart-toggle"
+          style={{ marginTop: 10 }}
+          onClick={() => setExpanded(false)}
+        >
+          Collapse to {initialCount}
+        </button>
+      )}
 
       {hover && (
         <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}>

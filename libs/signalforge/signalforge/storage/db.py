@@ -165,6 +165,7 @@ class Alert(Base, TimestampMixin):
     session_uid: Mapped[Optional[str]] = mapped_column(String(128))
     dedup_key: Mapped[str] = mapped_column(String(64), index=True)
     occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    is_building_block: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     incident_id: Mapped[Optional[str]] = mapped_column(

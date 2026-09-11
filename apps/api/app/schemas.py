@@ -99,6 +99,7 @@ class AlertSummary(BaseModel):
     source_ip: Optional[str] = None
     hostname: Optional[str] = None
     occurrences: int
+    is_building_block: bool = False
     first_seen: datetime
     last_seen: datetime
     tactics: List[str] = Field(default_factory=list)

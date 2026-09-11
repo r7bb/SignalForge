@@ -87,6 +87,11 @@ class Alert(BaseModel):
     sample_event: Optional[Dict[str, Any]] = None
     enrichments: List[Enrichment] = Field(default_factory=list)
 
+    #: True for rules that exist only to feed correlation (Sigma building
+    #: blocks). They are real alerts, but they do not belong in the queue an
+    #: analyst works - they would bury everything else.
+    is_building_block: bool = False
+
     # Lifecycle
     status: AlertStatus = AlertStatus.NEW
     first_seen: datetime = Field(default_factory=utcnow)

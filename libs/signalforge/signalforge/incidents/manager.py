@@ -136,11 +136,16 @@ class IncidentManager:
         source_ip: Optional[str] = None,
         incident_id: Optional[str] = None,
         since: Optional[datetime] = None,
+        include_building_blocks: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> List[Alert]:
         with self.session_factory() as session:
             query = select(dbm.Alert).where(dbm.Alert.tenant == tenant)
+            if not include_building_blocks:
+                # Correlation building blocks are excluded unless asked for:
+                # they are numerous by design and would bury real findings.
+                query = query.where(dbm.Alert.is_building_block.is_(False))
             if status:
                 query = query.where(dbm.Alert.status.in_(list(status)))
             if rule_id:
@@ -221,7 +226,12 @@ class IncidentManager:
     def top_rules(self, tenant: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Noisiest rules by alert count - the tuning worklist."""
         with self.session_factory() as session:
-            rows = session.scalars(select(dbm.Alert).where(dbm.Alert.tenant == tenant)).all()
+            rows = session.scalars(
+                select(dbm.Alert).where(
+                    dbm.Alert.tenant == tenant,
+                    dbm.Alert.is_building_block.is_(False),
+                )
+            ).all()
         counts: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             entry = counts.setdefault(
@@ -244,9 +254,11 @@ class IncidentManager:
             return []
         with self.session_factory() as session:
             rows = session.scalars(
-                select(dbm.Alert).where(
-                    dbm.Alert.tenant == tenant, dbm.Alert.id.in_(list(alert_ids))
-                )
+                select(dbm.Alert)
+                .where(dbm.Alert.tenant == tenant, dbm.Alert.id.in_(list(alert_ids)))
+                # Highest risk first: the stages that satisfied the correlation
+                # lead, and the informational building blocks fall below them.
+                .order_by(dbm.Alert.risk_score.desc(), dbm.Alert.first_seen.asc())
             ).all()
             return [_row_to_alert(row) for row in rows]
 
@@ -584,13 +596,16 @@ class IncidentManager:
         by_status: Dict[str, int] = {}
         for incident in incidents:
             by_status[incident.status] = by_status.get(incident.status, 0) + 1
+        building_blocks = sum(1 for a in alerts if a.is_building_block)
+        actionable = [a for a in alerts if not a.is_building_block]
         return {
             "incidents_total": len(incidents),
             "incidents_open": sum(1 for i in incidents if i.status in open_statuses),
             "incidents_by_status": by_status,
-            "alerts_total": len(alerts),
-            "alerts_critical": sum(1 for a in alerts if a.risk_level == "critical"),
-            "alerts_high": sum(1 for a in alerts if a.risk_level == "high"),
+            "alerts_total": len(actionable),
+            "alerts_building_blocks": building_blocks,
+            "alerts_critical": sum(1 for a in actionable if a.risk_level == "critical"),
+            "alerts_high": sum(1 for a in actionable if a.risk_level == "high"),
         }
 
     # ------------------------------------------------------------------ #
@@ -880,6 +895,7 @@ def _alert_to_row(alert: Alert, row: dbm.Alert) -> dbm.Alert:
     row.session_uid = alert.session_uid
     row.dedup_key = alert.dedup_key
     row.occurrences = alert.occurrences
+    row.is_building_block = alert.is_building_block
     row.first_seen = alert.first_seen
     row.last_seen = alert.last_seen
     row.tactics = list(alert.tactics)

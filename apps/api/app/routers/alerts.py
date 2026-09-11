@@ -29,6 +29,7 @@ def _summary(alert: Alert) -> Dict[str, Any]:
         "source_ip": alert.source_ip,
         "hostname": alert.hostname,
         "occurrences": alert.occurrences,
+        "is_building_block": alert.is_building_block,
         "first_seen": alert.first_seen,
         "last_seen": alert.last_seen,
         "tactics": alert.tactics,
@@ -46,6 +47,10 @@ async def list_alerts(
     source_ip: Optional[str] = None,
     min_risk: Optional[int] = Query(default=None, ge=0, le=100),
     hours: Optional[int] = Query(default=None, ge=1, le=8760),
+    include_building_blocks: bool = Query(
+        default=False,
+        description="Include correlation building blocks (informational, high volume)",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     tenant: str = Depends(tenant_scope),
@@ -61,6 +66,7 @@ async def list_alerts(
         source_ip=source_ip,
         min_risk=min_risk,
         since=since,
+        include_building_blocks=include_building_blocks,
         limit=limit,
         offset=offset,
     )

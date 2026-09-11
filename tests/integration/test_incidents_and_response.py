@@ -63,6 +63,36 @@ def test_alert_upsert_merges_repeats(incidents: IncidentManager) -> None:
     assert len(incidents.list_alerts("acme")) == 1
 
 
+def test_building_blocks_stay_out_of_the_analyst_queue(
+    ruleset, event_store, session_factory, settings
+) -> None:
+    """A correlation building block is stored, but does not bury the queue."""
+    from signalforge.lab import TelemetryGenerator
+    from signalforge.pipeline import Pipeline
+
+    incidents = IncidentManager(session_factory, event_store, settings)
+    pipeline = Pipeline(ruleset, event_store, settings=settings, incidents=incidents)
+    generator = TelemetryGenerator(tenant="acme", seed=21)
+
+    # 400 ordinary events: mostly successful logons, which is the building block.
+    pipeline.ingest(generator.normal_activity(400, BASE, spread_seconds=3600))
+
+    queue = incidents.list_alerts("acme", limit=500)
+    everything = incidents.list_alerts("acme", include_building_blocks=True, limit=500)
+
+    assert everything, "the building-block alerts must still be recorded"
+    assert len(queue) < len(everything), "the queue must be smaller than the raw set"
+    assert all(not alert.is_building_block for alert in queue)
+    assert any(alert.rule_id == "sf-auth-0002" for alert in everything)
+    assert not any(alert.rule_id == "sf-auth-0002" for alert in queue)
+
+    # They are also kept out of the "noisiest rules" tuning list and the counts.
+    assert all(row["rule_id"] != "sf-auth-0002" for row in incidents.top_rules("acme"))
+    counts = incidents.counts("acme")
+    assert counts["alerts_building_blocks"] > 0
+    assert counts["alerts_total"] == len(queue)
+
+
 def test_alert_status_change_is_audited(incidents: IncidentManager) -> None:
     stored, _ = incidents.record_alert(make_alert())
     updated = incidents.set_alert_status(

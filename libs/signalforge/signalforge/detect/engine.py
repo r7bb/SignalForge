@@ -275,6 +275,7 @@ class DetectionEngine:
             sample_event=event.to_document(),
             first_seen=first_seen or event.time,
             last_seen=event.time,
+            is_building_block=bool(rule.hints.tuning.get("building_block", False)),
         )
         if rule.hints.dedup_by:
             alert.dedup_key = _custom_dedup_key(alert, flat, rule.hints.dedup_by)
