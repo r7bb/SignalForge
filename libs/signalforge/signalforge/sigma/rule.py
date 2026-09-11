@@ -31,10 +31,20 @@ _TIMESPAN_RE = re.compile(r"^(\d+)\s*([smhdw])$", re.IGNORECASE)
 _TIMESPAN_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 _ATTACK_TACTICS = {
-    "reconnaissance", "resource_development", "initial_access", "execution",
-    "persistence", "privilege_escalation", "defense_evasion", "credential_access",
-    "discovery", "lateral_movement", "collection", "command_and_control",
-    "exfiltration", "impact",
+    "reconnaissance",
+    "resource_development",
+    "initial_access",
+    "execution",
+    "persistence",
+    "privilege_escalation",
+    "defense_evasion",
+    "credential_access",
+    "discovery",
+    "lateral_movement",
+    "collection",
+    "command_and_control",
+    "exfiltration",
+    "impact",
 }
 
 
@@ -81,7 +91,7 @@ class LogSource:
     definition: Optional[str] = None
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "LogSource":
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> LogSource:
         data = data or {}
         unknown = set(data) - {"category", "product", "service", "definition"}
         if unknown:
@@ -97,8 +107,10 @@ class LogSource:
         return {
             key: value
             for key, value in (
-                ("category", self.category), ("product", self.product),
-                ("service", self.service), ("definition", self.definition),
+                ("category", self.category),
+                ("product", self.product),
+                ("service", self.service),
+                ("definition", self.definition),
             )
             if value
         }
@@ -116,7 +128,7 @@ class Search:
     groups: List[List[Matcher]] = field(default_factory=list)
 
     @classmethod
-    def from_definition(cls, name: str, definition: Any) -> "Search":
+    def from_definition(cls, name: str, definition: Any) -> Search:
         groups: List[List[Matcher]] = []
 
         def _from_map(mapping: Dict[str, Any]) -> List[Matcher]:
@@ -175,7 +187,7 @@ class SignalForgeHints:
     tuning: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "SignalForgeHints":
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> SignalForgeHints:
         data = data or {}
         confidence = data.get("confidence", 7)
         if not isinstance(confidence, int) or not 1 <= confidence <= 10:
@@ -184,7 +196,9 @@ class SignalForgeHints:
             confidence=confidence,
             dedup_by=tuple(data.get("dedup_by") or ()),
             response_playbook=data.get("response_playbook"),
-            context_modifiers={k: float(v) for k, v in (data.get("context_modifiers") or {}).items()},
+            context_modifiers={
+                k: float(v) for k, v in (data.get("context_modifiers") or {}).items()
+            },
             suppress_seconds=parse_timespan(data.get("suppress")),
             correlation_scenario=data.get("scenario"),
             tuning=dict(data.get("tuning") or {}),
@@ -245,7 +259,7 @@ class SigmaRule:
 
     # -- parsing -----------------------------------------------------------
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], source_path: Optional[str] = None) -> "SigmaRule":
+    def from_dict(cls, data: Dict[str, Any], source_path: Optional[str] = None) -> SigmaRule:
         if not isinstance(data, dict):
             raise SigmaParseError("rule must be a YAML mapping", source_path)
         for required in ("title", "detection"):
@@ -333,6 +347,11 @@ class SigmaCorrelationRule:
     level: str = "high"
     status: str = "experimental"
     description: Optional[str] = None
+    author: Optional[str] = None
+    date: Optional[str] = None
+    modified: Optional[str] = None
+    references: List[str] = field(default_factory=list)
+    fields: List[str] = field(default_factory=list)
     condition: Dict[str, Any] = field(default_factory=dict)
     aliases: Dict[str, Dict[str, str]] = field(default_factory=dict)
     generate: bool = False
@@ -380,7 +399,9 @@ class SigmaCorrelationRule:
         return self.condition.get("field")
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], source_path: Optional[str] = None) -> "SigmaCorrelationRule":
+    def from_dict(
+        cls, data: Dict[str, Any], source_path: Optional[str] = None
+    ) -> SigmaCorrelationRule:
         correlation = data.get("correlation")
         if not isinstance(correlation, dict):
             raise SigmaParseError("correlation block must be a mapping", source_path)
@@ -412,7 +433,9 @@ class SigmaCorrelationRule:
         if corr_type == "value_count" and not condition.get("field"):
             raise SigmaParseError("value_count correlation requires condition.field", source_path)
         if corr_type in {"temporal", "temporal_ordered"} and len(refs) < 2:
-            raise SigmaParseError("%s correlation needs at least two rules" % corr_type, source_path)
+            raise SigmaParseError(
+                "%s correlation needs at least two rules" % corr_type, source_path
+            )
 
         rule_id = str(data.get("id") or "").strip()
         if not rule_id:
@@ -431,6 +454,11 @@ class SigmaCorrelationRule:
             level=level,
             status=str(data.get("status", "experimental")).lower(),
             description=data.get("description"),
+            author=data.get("author"),
+            date=str(data["date"]) if data.get("date") else None,
+            modified=str(data["modified"]) if data.get("modified") else None,
+            references=list(data.get("references") or []),
+            fields=list(data.get("fields") or []),
             condition=dict(condition),
             aliases=dict(correlation.get("aliases") or {}),
             generate=bool(correlation.get("generate", False)),

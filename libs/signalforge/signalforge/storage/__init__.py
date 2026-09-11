@@ -4,8 +4,8 @@ from .bus import EventBus, InMemoryBus, KafkaBus, Record, get_bus, reset_bus
 from .events import (
     EventQuery,
     EventStore,
-    InMemoryEventStore,
     IndexResult,
+    InMemoryEventStore,
     OpenSearchEventStore,
     SearchResult,
     get_event_store,

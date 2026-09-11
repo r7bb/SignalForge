@@ -18,8 +18,8 @@ from ...models.ocsf import (
     OcsfEvent,
     RawLogRecord,
     Resource,
-    SeverityId,
     Session,
+    SeverityId,
     StatusId,
     User,
 )
@@ -59,8 +59,14 @@ _EVENT_MAP: Dict[str, Any] = {
 
 #: Write-ish API verbs fall back to API Activity with these activity ids.
 _VERB_ACTIVITY = {
-    "Create": 1, "Put": 3, "Update": 3, "Modify": 3, "Delete": 4,
-    "Get": 2, "List": 2, "Describe": 2,
+    "Create": 1,
+    "Put": 3,
+    "Update": 3,
+    "Modify": 3,
+    "Delete": 4,
+    "Get": 2,
+    "List": 2,
+    "Describe": 2,
 }
 
 _CRITICAL_RESOURCE_HINTS = ("prod", "payments", "secrets", "customer")
@@ -109,11 +115,11 @@ class CloudTrailMapper(Mapper):
 
         # ConsoleLogin carries its outcome in additionalEventData/responseElements.
         login_result = (
-            response.get("ConsoleLogin") or additional.get("ConsoleLogin") or additional.get("LoginTo")
+            response.get("ConsoleLogin")
+            or additional.get("ConsoleLogin")
+            or additional.get("LoginTo")
         )
-        if error_code:
-            status_id = StatusId.FAILURE
-        elif isinstance(login_result, str) and login_result.lower() == "failure":
+        if error_code or (isinstance(login_result, str) and login_result.lower() == "failure"):
             status_id = StatusId.FAILURE
         else:
             status_id = StatusId.SUCCESS
@@ -160,15 +166,20 @@ class CloudTrailMapper(Mapper):
                 response=ApiResponse(error=error_code, message=payload.get("errorMessage")),
                 version=payload.get("eventVersion"),
             ),
-            http_request=HttpRequest(user_agent=payload.get("userAgent")) if payload.get("userAgent") else None,
+            http_request=HttpRequest(user_agent=payload.get("userAgent"))
+            if payload.get("userAgent")
+            else None,
             group=Group(name=request.get("groupName")) if request.get("groupName") else None,
             is_mfa=_first_not_none(
                 _as_bool(session_ctx.get("mfaAuthenticated")), _as_bool(additional.get("MFAUsed"))
             ),
-            logon_type="AWS Console" if event_name == "ConsoleLogin" else None,
+            logon_type=_logon_type(str(event_name), identity, additional),
             resources=self._resources(payload, request, response),
-            metadata={"uid": payload.get("eventID"), "log_name": "cloudtrail",
-                      "labels": _labels(payload)},
+            metadata={
+                "uid": payload.get("eventID"),
+                "log_name": "cloudtrail",
+                "labels": _labels(payload),
+            },
             unmapped={
                 "readOnly": payload.get("readOnly"),
                 "managementEvent": payload.get("managementEvent"),
@@ -176,9 +187,8 @@ class CloudTrailMapper(Mapper):
                 "requestParameters": request or None,
                 "policyArn": request.get("policyArn"),
             },
-            message="%s %s by %s" % (
-                payload.get("eventSource", "aws"), event_name, principal_name or "unknown"
-            ),
+            message="%s %s by %s"
+            % (payload.get("eventSource", "aws"), event_name, principal_name or "unknown"),
         )
         return event
 
@@ -220,12 +230,13 @@ class CloudTrailMapper(Mapper):
                     data_classification=request.get("key"),
                 )
             )
-        key_id = ((response.get("accessKey") or {}) if isinstance(response.get("accessKey"), dict) else {}).get(
-            "accessKeyId"
-        )
+        key_id = (
+            (response.get("accessKey") or {}) if isinstance(response.get("accessKey"), dict) else {}
+        ).get("accessKeyId")
         if key_id:
-            resources.append(Resource(uid=key_id, name=key_id, type="AWS::IAM::AccessKey",
-                                      criticality="high"))
+            resources.append(
+                Resource(uid=key_id, name=key_id, type="AWS::IAM::AccessKey", criticality="high")
+            )
         return resources
 
 
@@ -251,6 +262,23 @@ def _as_bool(value: Any) -> Optional[bool]:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"true", "yes", "1"}
+
+
+def _logon_type(
+    event_name: str, identity: Dict[str, Any], additional: Dict[str, Any]
+) -> Optional[str]:
+    """Distinguish a federated console sign-in from a plain IAM-user one.
+
+    A SAML console login has its MFA asserted by the identity provider, so
+    detections that require MFA on the AWS side must be able to filter it out.
+    """
+    if event_name not in {"ConsoleLogin", "AssumeRoleWithSAML"}:
+        return None
+    if additional.get("SamlProviderArn") or event_name == "AssumeRoleWithSAML":
+        return "SAML"
+    if str(identity.get("type") or "") in {"SAMLUser", "WebIdentityUser", "AssumedRole"}:
+        return "SAML"
+    return "AWS Console"
 
 
 def _first_not_none(*values: Any) -> Optional[bool]:

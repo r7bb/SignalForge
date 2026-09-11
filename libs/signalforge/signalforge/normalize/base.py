@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
+from ..identity import get_resolver
 from ..models.ocsf import OcsfEvent, RawLogRecord
 
 log = logging.getLogger("signalforge.normalize")
@@ -43,16 +44,39 @@ class Mapper:
         event.sf_source = record.source
         event.sf_raw = record.raw
         event.metadata.product.name = event.metadata.product.name or self.product_name
-        event.metadata.product.vendor_name = (
-            event.metadata.product.vendor_name or self.vendor_name
-        )
+        event.metadata.product.vendor_name = event.metadata.product.vendor_name or self.vendor_name
         event.metadata.log_provider = event.metadata.log_provider or record.collector
         event.metadata.processed_time = event.metadata.processed_time or record.received_at
         event.metadata.original_time = event.metadata.original_time or (
             str(record.payload.get("timestamp") or record.payload.get("eventTime") or "") or None
         )
+        self.resolve_identities(event)
         event.sf_dedup_key = event.compute_dedup_key()
         return event.derive_observables()
+
+    @staticmethod
+    def resolve_identities(event: OcsfEvent) -> OcsfEvent:
+        """Fill canonical emails so one human correlates across sources."""
+        resolver = get_resolver()
+        for user in (event.actor.user if event.actor else None, event.user):
+            if user is None:
+                continue
+            identity = (
+                resolver.resolve(user.email_addr)
+                or resolver.resolve(user.name)
+                or resolver.resolve(user.uid)
+            )
+            if identity is None:
+                continue
+            user.email_addr = user.email_addr or identity.email
+            user.uid = user.uid or identity.uid
+            if identity.is_service_account and user.type != "Service":
+                # Known automation identities are typed as service accounts so
+                # detections can filter them; the source's own value is kept.
+                if user.type:
+                    event.unmapped.setdefault("source_user_type", user.type)
+                user.type = "Service"
+        return event
 
 
 class MapperRegistry:
@@ -76,6 +100,17 @@ class MapperRegistry:
     @property
     def sources(self) -> List[str]:
         return [mapper.source for mapper in self._mappers]
+
+    def describe(self) -> List[Dict[str, str]]:
+        """Public introspection of the registered mappers (used by the API)."""
+        return [
+            {
+                "source": mapper.source,
+                "product": mapper.product_name,
+                "vendor": mapper.vendor_name,
+            }
+            for mapper in self._mappers
+        ]
 
     def normalize(self, record: RawLogRecord) -> OcsfEvent:
         mapper = self.resolve(record)
@@ -105,7 +140,9 @@ class MapperRegistry:
             try:
                 events.append(self.normalize(record))
             except NormalizationError as exc:
-                log.warning("normalization failed", extra={"source": record.source, "error": str(exc)})
+                log.warning(
+                    "normalization failed", extra={"source": record.source, "error": str(exc)}
+                )
                 failures.append((record, str(exc)))
         return events, failures
 

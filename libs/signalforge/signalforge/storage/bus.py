@@ -60,8 +60,7 @@ class EventBus:
     async def stop(self) -> None:
         return None
 
-    async def publish(self, topic: str, value: Dict[str, Any],
-                      key: Optional[str] = None) -> None:
+    async def publish(self, topic: str, value: Dict[str, Any], key: Optional[str] = None) -> None:
         raise NotImplementedError
 
     async def publish_many(
@@ -82,7 +81,7 @@ class EventBus:
 # In-process bus
 # --------------------------------------------------------------------------- #
 class InMemoryConsumer(Consumer):
-    def __init__(self, bus: "InMemoryBus", topics: Sequence[str], group: str) -> None:
+    def __init__(self, bus: InMemoryBus, topics: Sequence[str], group: str) -> None:
         self.bus = bus
         self.topics = list(topics)
         self.group = group
@@ -97,7 +96,7 @@ class InMemoryConsumer(Consumer):
             for topic in self.topics:
                 position = self.bus.offsets.get((self.group, topic), 0)
                 partition = self.bus.log.get(topic, [])
-                slice_ = partition[position:position + max_records - len(records)]
+                slice_ = partition[position : position + max_records - len(records)]
                 if slice_:
                     records.extend(slice_)
                     self._inflight[topic] = position + len(slice_)
@@ -132,13 +131,10 @@ class InMemoryBus(EventBus):
         self.offsets: Dict[Any, int] = {}
         self._lock = asyncio.Lock()
 
-    async def publish(self, topic: str, value: Dict[str, Any],
-                      key: Optional[str] = None) -> None:
+    async def publish(self, topic: str, value: Dict[str, Any], key: Optional[str] = None) -> None:
         async with self._lock:
             partition = self.log.setdefault(topic, [])
-            partition.append(
-                Record(topic=topic, value=value, key=key, offset=len(partition))
-            )
+            partition.append(Record(topic=topic, value=value, key=key, offset=len(partition)))
 
     def consumer(self, topics: Sequence[str], group: str) -> Consumer:
         return InMemoryConsumer(self, topics, group)
@@ -170,14 +166,16 @@ class KafkaConsumerWrapper(Consumer):
         records: List[Record] = []
         for topic_partition, messages in batches.items():
             for message in messages:
-                records.append(Record(
-                    topic=topic_partition.topic,
-                    partition=topic_partition.partition,
-                    value=json.loads(message.value.decode("utf-8")),
-                    key=message.key.decode("utf-8") if message.key else None,
-                    offset=message.offset,
-                    timestamp=(message.timestamp or 0) / 1000.0,
-                ))
+                records.append(
+                    Record(
+                        topic=topic_partition.topic,
+                        partition=topic_partition.partition,
+                        value=json.loads(message.value.decode("utf-8")),
+                        key=message.key.decode("utf-8") if message.key else None,
+                        offset=message.offset,
+                        timestamp=(message.timestamp or 0) / 1000.0,
+                    )
+                )
         self._has_uncommitted = bool(records)
         return records
 
@@ -217,8 +215,7 @@ class KafkaBus(EventBus):
             await self._producer.stop()
             self._producer = None
 
-    async def publish(self, topic: str, value: Dict[str, Any],
-                      key: Optional[str] = None) -> None:
+    async def publish(self, topic: str, value: Dict[str, Any], key: Optional[str] = None) -> None:
         await self.start()
         await self._producer.send_and_wait(topic, value=value, key=key)
 

@@ -24,11 +24,17 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
-    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    relationship,
+    sessionmaker,
+)
 
 from ..config import Settings, get_settings
 
@@ -66,7 +72,7 @@ class Tenant(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    users: Mapped[List["User"]] = relationship(back_populates="tenant")
+    users: Mapped[List[User]] = relationship(back_populates="tenant")
 
 
 class User(Base, TimestampMixin):
@@ -110,16 +116,14 @@ class Detection(Base, TimestampMixin):
     techniques: Mapped[Any] = mapped_column(JsonType, default=list)
     metadata_json: Mapped[Any] = mapped_column(JsonType, default=dict)
 
-    versions: Mapped[List["DetectionVersion"]] = relationship(
+    versions: Mapped[List[DetectionVersion]] = relationship(
         back_populates="detection", cascade="all, delete-orphan"
     )
 
 
 class DetectionVersion(Base):
     __tablename__ = "detection_versions"
-    __table_args__ = (
-        UniqueConstraint("detection_id", "revision", name="uq_detection_version"),
-    )
+    __table_args__ = (UniqueConstraint("detection_id", "revision", name="uq_detection_version"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     detection_id: Mapped[str] = mapped_column(ForeignKey("detections.id"), index=True)
@@ -171,7 +175,7 @@ class Alert(Base, TimestampMixin):
     #: Full Alert pydantic document (evidence, enrichments, matched fields).
     payload: Mapped[Any] = mapped_column(JsonType, default=dict)
 
-    incident: Mapped[Optional["Incident"]] = relationship(back_populates="alerts")
+    incident: Mapped[Optional[Incident]] = relationship(back_populates="alerts")
 
 
 class Incident(Base, TimestampMixin):
@@ -202,10 +206,10 @@ class Incident(Base, TimestampMixin):
     payload: Mapped[Any] = mapped_column(JsonType, default=dict)
 
     alerts: Mapped[List[Alert]] = relationship(back_populates="incident")
-    notes: Mapped[List["IncidentNote"]] = relationship(
+    notes: Mapped[List[IncidentNote]] = relationship(
         back_populates="incident", cascade="all, delete-orphan"
     )
-    actions: Mapped[List["ResponseAction"]] = relationship(back_populates="incident")
+    actions: Mapped[List[ResponseAction]] = relationship(back_populates="incident")
 
 
 class IncidentNote(Base):
@@ -273,9 +277,7 @@ class ResponseAction(Base, TimestampMixin):
 # --------------------------------------------------------------------------- #
 class Indicator(Base, TimestampMixin):
     __tablename__ = "indicators"
-    __table_args__ = (
-        UniqueConstraint("type", "value", "provider", name="uq_indicator_identity"),
-    )
+    __table_args__ = (UniqueConstraint("type", "value", "provider", name="uq_indicator_identity"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     type: Mapped[str] = mapped_column(String(32), index=True)  # ip | domain | file_hash | url
@@ -304,8 +306,9 @@ class Application(Base, TimestampMixin):
     criticality: Mapped[str] = mapped_column(String(32), default="medium")
     owner: Mapped[Optional[str]] = mapped_column(String(255))
 
-    sboms: Mapped[List["Sbom"]] = relationship(back_populates="application",
-                                               cascade="all, delete-orphan")
+    sboms: Mapped[List[Sbom]] = relationship(
+        back_populates="application", cascade="all, delete-orphan"
+    )
 
 
 class Sbom(Base):
@@ -320,7 +323,7 @@ class Sbom(Base):
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     application: Mapped[Application] = relationship(back_populates="sboms")
-    components: Mapped[List["SbomComponent"]] = relationship(
+    components: Mapped[List[SbomComponent]] = relationship(
         back_populates="sbom", cascade="all, delete-orphan"
     )
 
@@ -339,9 +342,7 @@ class Component(Base):
 
 class SbomComponent(Base):
     __tablename__ = "sbom_components"
-    __table_args__ = (
-        UniqueConstraint("sbom_id", "component_id", name="uq_sbom_component"),
-    )
+    __table_args__ = (UniqueConstraint("sbom_id", "component_id", name="uq_sbom_component"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     sbom_id: Mapped[str] = mapped_column(ForeignKey("sboms.id"), index=True)
@@ -382,7 +383,9 @@ class ComponentVulnerability(Base):
     component_id: Mapped[str] = mapped_column(ForeignKey("components.id"), index=True)
     vulnerability_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.id"), index=True)
     matched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    status: Mapped[str] = mapped_column(String(32), default="affected")  # affected | fixed | ignored
+    status: Mapped[str] = mapped_column(
+        String(32), default="affected"
+    )  # affected | fixed | ignored
 
     component: Mapped[Component] = relationship()
     vulnerability: Mapped[Vulnerability] = relationship()
@@ -477,8 +480,13 @@ def record_audit(
     **data: Any,
 ) -> AuditLog:
     entry = AuditLog(
-        tenant=tenant, actor=actor, action=action, entity_type=entity_type,
-        entity_id=entity_id, detail=detail, data=data or {},
+        tenant=tenant,
+        actor=actor,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        detail=detail,
+        data=data or {},
     )
     session.add(entry)
     return entry

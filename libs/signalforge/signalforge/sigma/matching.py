@@ -17,15 +17,37 @@ import base64
 import codecs
 import ipaddress
 import re
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .errors import SigmaParseError
 
 KNOWN_MODIFIERS = {
-    "contains", "startswith", "endswith", "all", "re", "i", "m", "s", "cased",
-    "cidr", "lt", "lte", "gt", "gte", "exists", "base64", "base64offset",
-    "windash", "fieldref", "expand", "utf16", "utf16le", "utf16be", "wide",
+    "contains",
+    "startswith",
+    "endswith",
+    "all",
+    "re",
+    "i",
+    "m",
+    "s",
+    "cased",
+    "cidr",
+    "lt",
+    "lte",
+    "gt",
+    "gte",
+    "exists",
+    "base64",
+    "base64offset",
+    "windash",
+    "fieldref",
+    "expand",
+    "utf16",
+    "utf16le",
+    "utf16be",
+    "wide",
 }
 
 _COMPARISON = {"lt", "lte", "gt", "gte"}
@@ -38,7 +60,7 @@ def _to_list(value: Any) -> List[Any]:
     return [value]
 
 
-def glob_to_regex(pattern: str, *, case_sensitive: bool = False) -> "re.Pattern[str]":
+def glob_to_regex(pattern: str, *, case_sensitive: bool = False) -> re.Pattern[str]:
     """Translate a Sigma wildcard pattern into an anchored regex.
 
     ``*`` matches any run of characters, ``?`` exactly one; ``\\*`` and ``\\?``
@@ -88,12 +110,13 @@ def _base64_variants(text: str, modifiers: Sequence[str] = ()) -> List[str]:
         encoded = base64.b64encode(b" " * offset + raw).decode("ascii")
         # The trailing characters are only unambiguous when the padded length
         # is a multiple of 3; otherwise drop the bits the next byte would supply.
-        variants.append(encoded[_B64_START[offset]:_B64_END[(len(raw) + offset) % 3]])
+        variants.append(encoded[_B64_START[offset] : _B64_END[(len(raw) + offset) % 3]])
     return variants
 
 
 def _windash_variants(text: str) -> List[str]:
-    dashes = ["-", "/", "–", "—", "―"]
+    # Sigma's windash expands the unicode dashes attackers substitute for "-".
+    dashes = ["-", "/", "\u2013", "\u2014", "\u2015"]
     variants = {text}
     if text and text[0] in dashes:
         for dash in dashes:
@@ -114,7 +137,7 @@ class FieldMatcher:
 
     # -- construction -----------------------------------------------------
     @classmethod
-    def compile(cls, key: str, value: Any) -> "FieldMatcher":
+    def compile(cls, key: str, value: Any) -> FieldMatcher:
         parts = key.split("|")
         field_name = parts[0].strip()
         modifiers = tuple(m.strip().lower() for m in parts[1:] if m.strip())
@@ -163,9 +186,7 @@ class FieldMatcher:
             if "base64offset" in self.modifiers:
                 values.extend(_base64_variants(text, self.modifiers))
             elif "base64" in self.modifiers:
-                values.append(
-                    base64.b64encode(_utf16_encode(text, self.modifiers)).decode("ascii")
-                )
+                values.append(base64.b64encode(_utf16_encode(text, self.modifiers)).decode("ascii"))
             elif "windash" in self.modifiers:
                 values.extend(_windash_variants(text))
             else:
@@ -185,9 +206,13 @@ class FieldMatcher:
                 other = _observed_values(flat, str(value))
                 if any(self._eq(a, b) for a in observed for b in other):
                     return not self.is_all
-            return self.is_all and bool(self.values) and all(
-                any(self._eq(a, b) for a in observed for b in _observed_values(flat, str(v)))
-                for v in self.values
+            return (
+                self.is_all
+                and bool(self.values)
+                and all(
+                    any(self._eq(a, b) for a in observed for b in _observed_values(flat, str(v)))
+                    for v in self.values
+                )
             )
 
         observed = _observed_values(flat, self.field)
@@ -317,8 +342,7 @@ class KeywordMatcher:
 def _iter_scalars(values: Iterable[Any]) -> Iterable[Any]:
     for value in values:
         if isinstance(value, (list, tuple)):
-            for item in value:
-                yield item
+            yield from value
         else:
             yield value
 

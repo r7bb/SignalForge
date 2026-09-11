@@ -201,9 +201,7 @@ class _Parser:
 
     def _expand(self, target: str, quantifier: str) -> Node:
         pattern = "*" if target.lower() == "them" else target
-        matches = sorted(
-            name for name in self.available if fnmatch.fnmatch(name, pattern)
-        )
+        matches = sorted(name for name in self.available if fnmatch.fnmatch(name, pattern))
         if not matches:
             raise SigmaConditionError(
                 "'%s of %s' matches no search identifier" % (quantifier, target)
@@ -230,11 +228,16 @@ class _Parser:
         raw_threshold = self.next()
         try:
             threshold = float(raw_threshold)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            raise SigmaConditionError("aggregation threshold must be numeric, got %r" % raw_threshold)
+        except (TypeError, ValueError) as exc:
+            raise SigmaConditionError(
+                "aggregation threshold must be numeric, got %r" % raw_threshold
+            ) from exc
         return Aggregation(
-            function=function, field=agg_field, group_by=group_by,
-            operator=operator, threshold=threshold,
+            function=function,
+            field=agg_field,
+            group_by=group_by,
+            operator=operator,
+            threshold=threshold,
         )
 
 
@@ -252,10 +255,8 @@ def parse_condition(text: str, available_searches: Sequence[str]) -> ParsedCondi
         parser.next()
         aggregation = parser.parse_aggregation()
     if parser.peek() is not None:
-        raise SigmaConditionError("trailing tokens in condition: %r" % parser.tokens[parser.pos:])
-    unknown = sorted(
-        set(expression.identifiers()) - set(available_searches)
-    )
+        raise SigmaConditionError("trailing tokens in condition: %r" % parser.tokens[parser.pos :])
+    unknown = sorted(set(expression.identifiers()) - set(available_searches))
     if unknown:
         raise SigmaConditionError(
             "condition references undefined search identifier(s): %s" % ", ".join(unknown)

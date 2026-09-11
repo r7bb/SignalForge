@@ -8,7 +8,7 @@ the worst failure mode a detection can have).
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Set, Union, get_args, get_origin
+from typing import Any, List, Set, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -24,7 +24,7 @@ def _unwrap(annotation: Any) -> List[Any]:
     """Strip Optional/List/Dict wrappers down to the underlying type(s)."""
     origin = get_origin(annotation)
     if origin is Union:
-        return [arg for arg in get_args(annotation) if arg is not type(None)]  # noqa: E721
+        return [arg for arg in get_args(annotation) if arg is not type(None)]
     if origin in (list, set, tuple, dict):
         args = get_args(annotation)
         return list(args[-1:]) if args else []

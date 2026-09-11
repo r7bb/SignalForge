@@ -27,8 +27,9 @@ class MatchResult:
         return self.matched
 
 
-def evaluate_node(node: Node, searches: Dict[str, Any], flat: Dict[str, Any],
-                  hits: Dict[str, bool]) -> bool:
+def evaluate_node(
+    node: Node, searches: Dict[str, Any], flat: Dict[str, Any], hits: Dict[str, bool]
+) -> bool:
     """Evaluate a condition AST node, memoizing per-search results."""
 
     def search_hit(name: str) -> bool:
@@ -74,8 +75,9 @@ def evaluate_flat(rule: SigmaRule, flat: Dict[str, Any]) -> MatchResult:
     )
 
 
-def evaluate(rule: SigmaRule, event: OcsfEvent,
-             flat: Optional[Dict[str, Any]] = None) -> MatchResult:
+def evaluate(
+    rule: SigmaRule, event: OcsfEvent, flat: Optional[Dict[str, Any]] = None
+) -> MatchResult:
     """Evaluate a rule against an OCSF event (logsource prefilter included)."""
     if not event_matches_logsource(rule, event):
         return MatchResult(matched=False, rule_id=rule.id)

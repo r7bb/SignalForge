@@ -24,8 +24,8 @@ from ...models.ocsf import (
     OcsfEvent,
     RawLogRecord,
     Resource,
-    SeverityId,
     Session,
+    SeverityId,
     StatusId,
     User,
 )
@@ -56,8 +56,15 @@ _ACTION_MAP: Dict[str, Any] = {
 }
 
 _HTTP_ACTIVITY = {
-    "CONNECT": 1, "DELETE": 2, "GET": 3, "HEAD": 4,
-    "OPTIONS": 5, "POST": 6, "PUT": 7, "TRACE": 8, "PATCH": 9,
+    "CONNECT": 1,
+    "DELETE": 2,
+    "GET": 3,
+    "HEAD": 4,
+    "OPTIONS": 5,
+    "POST": 6,
+    "PUT": 7,
+    "TRACE": 8,
+    "PATCH": 9,
 }
 
 _PRIVILEGED_ROLES = {"admin", "administrator", "owner", "superuser", "security-admin"}
@@ -108,15 +115,19 @@ class WebAppMapper(Mapper):
             status_code=str(status_code) if status_code is not None else None,
             status_detail=payload.get("reason") or payload.get("detail"),
             severity_id=severity,
-            time=parse_time(payload.get("timestamp") or payload.get("time"),
-                            reference=record.received_at) or record.received_at,
+            time=parse_time(
+                payload.get("timestamp") or payload.get("time"), reference=record.received_at
+            )
+            or record.received_at,
             actor=Actor(
                 user=User(
                     name=actor_name,
                     email_addr=actor_name if "@" in str(actor_name or "") else None,
                     uid=str(payload.get("user_id")) if payload.get("user_id") else None,
                     type="Service" if payload.get("is_service_account") else "User",
-                    groups=[Group(name=str(payload["current_role"]))] if payload.get("current_role") else [],
+                    groups=[Group(name=str(payload["current_role"]))]
+                    if payload.get("current_role")
+                    else [],
                 ),
                 session=Session(
                     uid=payload.get("session_id"),
@@ -129,15 +140,22 @@ class WebAppMapper(Mapper):
                 name=target_name,
                 email_addr=target_name if "@" in str(target_name or "") else None,
                 type="Admin" if str(new_role or "").lower() in _PRIVILEGED_ROLES else "User",
-                groups=[Group(name=str(new_role), type="Privileged"
-                              if str(new_role).lower() in _PRIVILEGED_ROLES else "Standard")]
+                groups=[
+                    Group(
+                        name=str(new_role),
+                        type="Privileged"
+                        if str(new_role).lower() in _PRIVILEGED_ROLES
+                        else "Standard",
+                    )
+                ]
                 if new_role
                 else [],
             )
             if target_name or new_role
             else None,
-            src_endpoint=Endpoint(ip=payload.get("ip") or payload.get("source_ip"),
-                                  port=payload.get("source_port")),
+            src_endpoint=Endpoint(
+                ip=payload.get("ip") or payload.get("source_ip"), port=payload.get("source_port")
+            ),
             dst_endpoint=Endpoint(
                 hostname=payload.get("host") or payload.get("service"),
                 svc_name=payload.get("service") or "signalforge-lab-app",
@@ -170,13 +188,16 @@ class WebAppMapper(Mapper):
                     type=payload.get("resource_type") or "application-resource",
                     criticality=payload.get("resource_criticality"),
                     data_classification=payload.get("data_classification"),
-                    labels=[str(payload["data_classification"])] if payload.get("data_classification") else [],
+                    labels=[str(payload["data_classification"])]
+                    if payload.get("data_classification")
+                    else [],
                 )
             ]
             if resource_name
             else [],
             is_mfa=payload.get("mfa_used"),
-            logon_type=payload.get("logon_type") or ("Web" if class_uid == ClassUid.AUTHENTICATION else None),
+            logon_type=payload.get("logon_type")
+            or ("Web" if class_uid == ClassUid.AUTHENTICATION else None),
             metadata={
                 "uid": payload.get("event_id") or payload.get("request_id"),
                 "log_name": "app.audit",

@@ -34,7 +34,11 @@ class Problem:
 
     def format(self) -> str:
         return "%s [%s] %s: %s (%s)" % (
-            self.severity.upper(), self.code, self.path, self.message, self.rule_id or "-"
+            self.severity.upper(),
+            self.code,
+            self.path,
+            self.message,
+            self.rule_id or "-",
         )
 
 
@@ -100,17 +104,27 @@ def lint_rules(
                 continue
 
             if rule.id in seen_ids:
-                problems.append(Problem(
-                    rel, rule.id, "error", "duplicate-id",
-                    "id already used by %s" % seen_ids[rule.id],
-                ))
+                problems.append(
+                    Problem(
+                        rel,
+                        rule.id,
+                        "error",
+                        "duplicate-id",
+                        "id already used by %s" % seen_ids[rule.id],
+                    )
+                )
             seen_ids[rule.id] = rel
             if rule.name:
                 if rule.name in seen_names:
-                    problems.append(Problem(
-                        rel, rule.id, "error", "duplicate-name",
-                        "name %r already used by %s" % (rule.name, seen_names[rule.name]),
-                    ))
+                    problems.append(
+                        Problem(
+                            rel,
+                            rule.id,
+                            "error",
+                            "duplicate-name",
+                            "name %r already used by %s" % (rule.name, seen_names[rule.name]),
+                        )
+                    )
                 seen_names[rule.name] = rel
 
             problems.extend(_lint_metadata(rule, rel, require_attack_tags))
@@ -119,10 +133,15 @@ def lint_rules(
                 rules[rule.id] = rule
                 problems.extend(_lint_fields(apply_field_mapping(rule), rel))
                 if rule.is_stateful and not rule.timeframe:
-                    problems.append(Problem(
-                        rel, rule.id, "error", "missing-timeframe",
-                        "aggregation conditions require detection.timeframe",
-                    ))
+                    problems.append(
+                        Problem(
+                            rel,
+                            rule.id,
+                            "error",
+                            "missing-timeframe",
+                            "aggregation conditions require detection.timeframe",
+                        )
+                    )
             else:
                 correlations.append(rule)
 
@@ -130,10 +149,15 @@ def lint_rules(
                 test_path = test_file_for(path)
                 cases = load_rule_tests(path)
                 if not test_path or not cases:
-                    problems.append(Problem(
-                        rel, rule.id, "error", "missing-tests",
-                        "no %s.tests.yml with test cases" % path.stem,
-                    ))
+                    problems.append(
+                        Problem(
+                            rel,
+                            rule.id,
+                            "error",
+                            "missing-tests",
+                            "no %s.tests.yml with test cases" % path.stem,
+                        )
+                    )
                 else:
                     tested += 1
                     problems.extend(_lint_tests(rule, cases, str(test_path)))
@@ -143,11 +167,15 @@ def lint_rules(
     for correlation in correlations:
         for reference in correlation.rule_refs:
             if reference not in known:
-                problems.append(Problem(
-                    correlation.source_path or "-", correlation.id, "error",
-                    "unresolved-reference",
-                    "correlation references unknown rule %r" % reference,
-                ))
+                problems.append(
+                    Problem(
+                        correlation.source_path or "-",
+                        correlation.id,
+                        "error",
+                        "unresolved-reference",
+                        "correlation references unknown rule %r" % reference,
+                    )
+                )
 
     return LintReport(
         problems=problems,
@@ -160,24 +188,49 @@ def lint_rules(
 def _lint_metadata(rule: Any, path: str, require_attack_tags: bool) -> List[Problem]:
     problems: List[Problem] = []
     if not rule.description:
-        problems.append(Problem(path, rule.id, "warning", "missing-description",
-                                "rules should describe what they detect"))
+        problems.append(
+            Problem(
+                path,
+                rule.id,
+                "warning",
+                "missing-description",
+                "rules should describe what they detect",
+            )
+        )
     if not getattr(rule, "author", None):
         problems.append(Problem(path, rule.id, "warning", "missing-author", "no author set"))
     if require_attack_tags and not rule.tactics:
-        problems.append(Problem(path, rule.id, "error", "missing-attack-tactic",
-                                "add an attack.<tactic> tag for ATT&CK mapping"))
+        problems.append(
+            Problem(
+                path,
+                rule.id,
+                "error",
+                "missing-attack-tactic",
+                "add an attack.<tactic> tag for ATT&CK mapping",
+            )
+        )
     if require_attack_tags and not rule.techniques:
-        problems.append(Problem(path, rule.id, "warning", "missing-attack-technique",
-                                "add an attack.tXXXX tag"))
+        problems.append(
+            Problem(path, rule.id, "warning", "missing-attack-technique", "add an attack.tXXXX tag")
+        )
     if not rule.falsepositives:
-        problems.append(Problem(path, rule.id, "warning", "missing-falsepositives",
-                                "document known benign triggers"))
+        problems.append(
+            Problem(
+                path, rule.id, "warning", "missing-falsepositives", "document known benign triggers"
+            )
+        )
     if rule.status == "deprecated":
         problems.append(Problem(path, rule.id, "warning", "deprecated", "rule is deprecated"))
     if isinstance(rule, SigmaRule) and not rule.logsource.as_dict():
-        problems.append(Problem(path, rule.id, "error", "missing-logsource",
-                                "logsource must scope the rule to a category/product"))
+        problems.append(
+            Problem(
+                path,
+                rule.id,
+                "error",
+                "missing-logsource",
+                "logsource must scope the rule to a category/product",
+            )
+        )
     return problems
 
 
@@ -189,23 +242,42 @@ def _lint_fields(rule: SigmaRule, path: str) -> List[Problem]:
                 if not isinstance(matcher, FieldMatcher):
                     continue
                 if not is_known_field(matcher.field):
-                    problems.append(Problem(
-                        path, rule.id, "error", "unknown-field",
-                        "field %r is not part of the OCSF schema (search %r)"
-                        % (matcher.field, search.name),
-                    ))
+                    problems.append(
+                        Problem(
+                            path,
+                            rule.id,
+                            "error",
+                            "unknown-field",
+                            "field %r is not part of the OCSF schema (search %r)"
+                            % (matcher.field, search.name),
+                        )
+                    )
     for field_name in rule.fields:
         if not is_known_field(resolve_field(field_name)):
-            problems.append(Problem(
-                path, rule.id, "warning", "unknown-display-field",
-                "fields entry %r is not an OCSF path" % field_name,
-            ))
+            problems.append(
+                Problem(
+                    path,
+                    rule.id,
+                    "warning",
+                    "unknown-display-field",
+                    "fields entry %r is not an OCSF path" % field_name,
+                )
+            )
     aggregation = rule.condition.aggregation
-    if aggregation and aggregation.group_by and not is_known_field(resolve_field(aggregation.group_by)):
-        problems.append(Problem(
-            path, rule.id, "error", "unknown-groupby-field",
-            "aggregation groups by unknown field %r" % aggregation.group_by,
-        ))
+    if (
+        aggregation
+        and aggregation.group_by
+        and not is_known_field(resolve_field(aggregation.group_by))
+    ):
+        problems.append(
+            Problem(
+                path,
+                rule.id,
+                "error",
+                "unknown-groupby-field",
+                "aggregation groups by unknown field %r" % aggregation.group_by,
+            )
+        )
     return problems
 
 
@@ -214,15 +286,30 @@ def _lint_tests(rule: Any, cases: List[Dict[str, Any]], path: str) -> List[Probl
     kinds = {str(case.get("kind") or "").lower() for case in cases}
     for required in REQUIRED_TEST_KINDS:
         if required not in kinds:
-            problems.append(Problem(
-                path, rule.id, "error", "missing-test-kind",
-                "no %r test case" % required,
-            ))
+            problems.append(
+                Problem(
+                    path,
+                    rule.id,
+                    "error",
+                    "missing-test-kind",
+                    "no %r test case" % required,
+                )
+            )
     for index, case in enumerate(cases):
         if not case.get("name"):
-            problems.append(Problem(path, rule.id, "warning", "unnamed-test",
-                                    "test case #%d has no name" % index))
+            problems.append(
+                Problem(
+                    path, rule.id, "warning", "unnamed-test", "test case #%d has no name" % index
+                )
+            )
         if not case.get("events") and not case.get("logs"):
-            problems.append(Problem(path, rule.id, "error", "empty-test",
-                                    "test case %r has no events" % case.get("name", index)))
+            problems.append(
+                Problem(
+                    path,
+                    rule.id,
+                    "error",
+                    "empty-test",
+                    "test case %r has no events" % case.get("name", index),
+                )
+            )
     return problems

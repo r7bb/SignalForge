@@ -7,8 +7,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 _SYSLOG_RE = re.compile(r"^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})$")
-_MONTHS = {m: i + 1 for i, m in enumerate(
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+_MONTHS = {
+    m: i + 1
+    for i, m in enumerate(
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    )
+}
 
 
 def utcnow() -> datetime:
@@ -53,8 +57,13 @@ def parse_time(value: Any, *, reference: Optional[datetime] = None) -> Optional[
         ref = ensure_utc(reference or utcnow())
         month = _MONTHS[match.group(1)]
         parsed = datetime(
-            ref.year, month, int(match.group(2)), int(match.group(3)),
-            int(match.group(4)), int(match.group(5)), tzinfo=timezone.utc,
+            ref.year,
+            month,
+            int(match.group(2)),
+            int(match.group(3)),
+            int(match.group(4)),
+            int(match.group(5)),
+            tzinfo=timezone.utc,
         )
         if parsed - ref > timedelta(days=1):
             parsed = parsed.replace(year=ref.year - 1)

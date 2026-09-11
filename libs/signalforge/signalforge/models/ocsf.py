@@ -202,7 +202,7 @@ class Process(_Base):
     pid: Optional[int] = None
     cmd_line: Optional[str] = None
     user: Optional[User] = None
-    parent_process: Optional["Process"] = None
+    parent_process: Optional[Process] = None
 
 
 class Actor(_Base):
@@ -353,7 +353,7 @@ class OcsfEvent(_Base):
     def _ser_dt(self, value: Optional[datetime]) -> Optional[str]:
         return value.isoformat() if value else None
 
-    def model_post_init(self, __context: Any) -> None:  # noqa: D105
+    def model_post_init(self, __context: Any) -> None:
         if self.class_name is None:
             self.class_name = CLASS_NAMES.get(self.class_uid)
         if self.category_uid is None:
@@ -448,7 +448,7 @@ class OcsfEvent(_Base):
             return
         self.observables.append(Observable(name=name, type=type_, value=value))
 
-    def derive_observables(self) -> "OcsfEvent":
+    def derive_observables(self) -> OcsfEvent:
         """Populate ``observables`` from the mapped entities."""
         self.add_observable("src_endpoint.ip", "ip", self.source_ip)
         if self.dst_endpoint:
@@ -544,50 +544,111 @@ def flatten_event(event: Any, prefix: str = "") -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 ACTIVITY_NAMES: Dict[int, Dict[int, str]] = {
     ClassUid.FILE_SYSTEM_ACTIVITY: {
-        1: "Create", 2: "Read", 3: "Update", 4: "Delete", 5: "Rename",
-        6: "Set Attributes", 7: "Set Security", 8: "Get Attributes", 14: "Open",
+        1: "Create",
+        2: "Read",
+        3: "Update",
+        4: "Delete",
+        5: "Rename",
+        6: "Set Attributes",
+        7: "Set Security",
+        8: "Get Attributes",
+        14: "Open",
     },
     ClassUid.PROCESS_ACTIVITY: {
-        1: "Launch", 2: "Terminate", 3: "Open", 4: "Inject", 5: "Set User ID",
+        1: "Launch",
+        2: "Terminate",
+        3: "Open",
+        4: "Inject",
+        5: "Set User ID",
     },
     ClassUid.ACCOUNT_CHANGE: {
-        1: "Create", 2: "Enable", 3: "Password Change", 4: "Password Reset",
-        5: "Disable", 6: "Delete", 7: "Attach Policy", 8: "Detach Policy",
-        9: "Lock", 10: "MFA Factor Enable", 11: "MFA Factor Disable",
-        12: "Unlock", 13: "User Access Change", 14: "Group Access Change",
+        1: "Create",
+        2: "Enable",
+        3: "Password Change",
+        4: "Password Reset",
+        5: "Disable",
+        6: "Delete",
+        7: "Attach Policy",
+        8: "Detach Policy",
+        9: "Lock",
+        10: "MFA Factor Enable",
+        11: "MFA Factor Disable",
+        12: "Unlock",
+        13: "User Access Change",
+        14: "Group Access Change",
     },
     ClassUid.AUTHENTICATION: {
-        1: "Logon", 2: "Logoff", 3: "Authentication Ticket",
-        4: "Service Ticket Request", 5: "Service Ticket Renew", 6: "Preauth",
+        1: "Logon",
+        2: "Logoff",
+        3: "Authentication Ticket",
+        4: "Service Ticket Request",
+        5: "Service Ticket Renew",
+        6: "Preauth",
     },
     ClassUid.AUTHORIZE_SESSION: {
-        1: "Assign Privileges", 2: "Assign Groups",
+        1: "Assign Privileges",
+        2: "Assign Groups",
     },
     ClassUid.ENTITY_MANAGEMENT: {
-        1: "Create", 2: "Read", 3: "Update", 4: "Delete", 5: "Move",
-        6: "Enroll", 7: "Unenroll", 8: "Enable", 9: "Disable",
+        1: "Create",
+        2: "Read",
+        3: "Update",
+        4: "Delete",
+        5: "Move",
+        6: "Enroll",
+        7: "Unenroll",
+        8: "Enable",
+        9: "Disable",
     },
     ClassUid.USER_ACCESS_MANAGEMENT: {
-        1: "Assign Privileges", 2: "Revoke Privileges",
+        1: "Assign Privileges",
+        2: "Revoke Privileges",
     },
     ClassUid.GROUP_MANAGEMENT: {
-        1: "Assign Privileges", 2: "Revoke Privileges", 3: "Add User",
-        4: "Remove User", 5: "Delete", 6: "Create",
+        1: "Assign Privileges",
+        2: "Revoke Privileges",
+        3: "Add User",
+        4: "Remove User",
+        5: "Delete",
+        6: "Create",
     },
     ClassUid.HTTP_ACTIVITY: {
-        1: "Connect", 2: "Delete", 3: "Get", 4: "Head", 5: "Options",
-        6: "Post", 7: "Put", 8: "Trace", 9: "Patch",
+        1: "Connect",
+        2: "Delete",
+        3: "Get",
+        4: "Head",
+        5: "Options",
+        6: "Post",
+        7: "Put",
+        8: "Trace",
+        9: "Patch",
     },
     ClassUid.WEB_RESOURCES_ACTIVITY: {
-        1: "Create", 2: "Read", 3: "Update", 4: "Delete", 5: "Search",
-        6: "Import", 7: "Export", 8: "Share",
+        1: "Create",
+        2: "Read",
+        3: "Update",
+        4: "Delete",
+        5: "Search",
+        6: "Import",
+        7: "Export",
+        8: "Share",
     },
     ClassUid.API_ACTIVITY: {
-        1: "Create", 2: "Read", 3: "Update", 4: "Delete",
+        1: "Create",
+        2: "Read",
+        3: "Update",
+        4: "Delete",
     },
     ClassUid.DATASTORE_ACTIVITY: {
-        1: "Read", 2: "Update", 3: "Connect", 4: "Query", 5: "Write",
-        6: "Create", 7: "Delete", 8: "Encrypt", 9: "Decrypt",
+        1: "Read",
+        2: "Update",
+        3: "Connect",
+        4: "Query",
+        5: "Write",
+        6: "Create",
+        7: "Delete",
+        8: "Encrypt",
+        9: "Decrypt",
     },
 }
 

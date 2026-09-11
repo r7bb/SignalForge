@@ -140,8 +140,9 @@ class Incident(BaseModel):
     def evidence_count(self) -> int:
         return len(self.event_ids)
 
-    def record(self, action: str, actor: str = "system", detail: Optional[str] = None,
-               **data: Any) -> AuditEntry:
+    def record(
+        self, action: str, actor: str = "system", detail: Optional[str] = None, **data: Any
+    ) -> AuditEntry:
         entry = AuditEntry(actor=actor, action=action, detail=detail, data=data)
         self.audit.append(entry)
         self.updated_at = utcnow()

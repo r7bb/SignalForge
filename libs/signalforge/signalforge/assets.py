@@ -83,7 +83,10 @@ class AssetInventory:
 
 def load_inventory(path: Optional[str] = None) -> AssetInventory:
     candidates = [Path(path)] if path else []
-    candidates += [Path("schemas/assets.yml"), Path(__file__).resolve().parents[3] / "schemas" / "assets.yml"]
+    candidates += [
+        Path("schemas/assets.yml"),
+        Path(__file__).resolve().parents[3] / "schemas" / "assets.yml",
+    ]
     for candidate in candidates:
         if candidate and candidate.exists():
             with candidate.open("r", encoding="utf-8") as handle:

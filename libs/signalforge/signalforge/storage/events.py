@@ -18,12 +18,12 @@ import random
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..config import Settings, get_settings
-from ..models.ocsf import OcsfEvent, flatten_event
+from ..models.ocsf import OcsfEvent
 
 log = logging.getLogger("signalforge.storage.events")
 
@@ -67,26 +67,50 @@ class EventQuery:
         if self.class_uids:
             filters.append({"terms": {"class_uid": list(self.class_uids)}})
         if self.principal:
-            filters.append({
-                "bool": {
-                    "should": [
-                        {"term": {"actor.user.name": {"value": self.principal,
-                                                      "case_insensitive": True}}},
-                        {"term": {"actor.user.email_addr": {"value": self.principal,
-                                                            "case_insensitive": True}}},
-                        {"term": {"user.name": {"value": self.principal,
-                                                "case_insensitive": True}}},
-                        {"term": {"user.email_addr": {"value": self.principal,
-                                                      "case_insensitive": True}}},
-                    ],
-                    "minimum_should_match": 1,
+            filters.append(
+                {
+                    "bool": {
+                        "should": [
+                            {
+                                "term": {
+                                    "actor.user.name": {
+                                        "value": self.principal,
+                                        "case_insensitive": True,
+                                    }
+                                }
+                            },
+                            {
+                                "term": {
+                                    "actor.user.email_addr": {
+                                        "value": self.principal,
+                                        "case_insensitive": True,
+                                    }
+                                }
+                            },
+                            {
+                                "term": {
+                                    "user.name": {"value": self.principal, "case_insensitive": True}
+                                }
+                            },
+                            {
+                                "term": {
+                                    "user.email_addr": {
+                                        "value": self.principal,
+                                        "case_insensitive": True,
+                                    }
+                                }
+                            },
+                        ],
+                        "minimum_should_match": 1,
+                    }
                 }
-            })
+            )
         if self.source_ip:
             filters.append({"term": {"src_endpoint.ip": self.source_ip}})
         if self.hostname:
-            filters.append({"term": {"device.hostname": {"value": self.hostname,
-                                                         "case_insensitive": True}}})
+            filters.append(
+                {"term": {"device.hostname": {"value": self.hostname, "case_insensitive": True}}}
+            )
         if self.session_uid:
             filters.append({"term": {"actor.session.uid": self.session_uid}})
         if self.status_id is not None:
@@ -104,9 +128,9 @@ class EventQuery:
             filters.append({"range": {"time": time_range}})
         query: Dict[str, Any] = {"bool": {"filter": filters}}
         if self.text:
-            query["bool"]["must"] = [{
-                "query_string": {"query": self.text, "fields": ["*"], "analyze_wildcard": True}
-            }]
+            query["bool"]["must"] = [
+                {"query_string": {"query": self.text, "fields": ["*"], "analyze_wildcard": True}}
+            ]
         return {
             "size": self.size,
             "from": self.offset,
@@ -157,17 +181,39 @@ class EventStore:
         collected: Dict[str, OcsfEvent] = {}
         probes: List[EventQuery] = []
         for principal in principals:
-            probes.append(EventQuery(tenant=tenant, principal=principal, start=start, end=end,
-                                     size=size, ascending=True))
+            probes.append(
+                EventQuery(
+                    tenant=tenant,
+                    principal=principal,
+                    start=start,
+                    end=end,
+                    size=size,
+                    ascending=True,
+                )
+            )
         for ip in source_ips:
-            probes.append(EventQuery(tenant=tenant, source_ip=ip, start=start, end=end,
-                                     size=size, ascending=True))
+            probes.append(
+                EventQuery(
+                    tenant=tenant, source_ip=ip, start=start, end=end, size=size, ascending=True
+                )
+            )
         for host in hostnames:
-            probes.append(EventQuery(tenant=tenant, hostname=host, start=start, end=end,
-                                     size=size, ascending=True))
+            probes.append(
+                EventQuery(
+                    tenant=tenant, hostname=host, start=start, end=end, size=size, ascending=True
+                )
+            )
         for session in session_uids:
-            probes.append(EventQuery(tenant=tenant, session_uid=session, start=start, end=end,
-                                     size=size, ascending=True))
+            probes.append(
+                EventQuery(
+                    tenant=tenant,
+                    session_uid=session,
+                    start=start,
+                    end=end,
+                    size=size,
+                    ascending=True,
+                )
+            )
         for probe in probes:
             for event in self.search(probe).events:
                 collected[event.sf_event_id] = event
@@ -175,8 +221,9 @@ class EventStore:
         # event time (not ingest time) and ties broken by ingest order.
         return sorted(collected.values(), key=lambda e: (e.time, e.sf_ingested_at))[:size]
 
-    def stats(self, tenant: Optional[str] = None,
-              since: Optional[datetime] = None) -> Dict[str, Any]:
+    def stats(
+        self, tenant: Optional[str] = None, since: Optional[datetime] = None
+    ) -> Dict[str, Any]:
         raise NotImplementedError
 
     def flush_spool(self) -> IndexResult:
@@ -208,10 +255,11 @@ class InMemoryEventStore(EventStore):
         return result
 
     # -- reads -------------------------------------------------------------
-    def _all(self, tenant: Optional[str]) -> List[OcsfEvent]:
+    def _all(self, tenant: Optional[str]) -> Optional[List[OcsfEvent]]:
         with self._lock:
             return [
-                event for (event_tenant, _), event in self._by_dedup.items()
+                event
+                for (event_tenant, _), event in self._by_dedup.items()
                 if tenant is None or event_tenant == tenant
             ]
 
@@ -219,7 +267,7 @@ class InMemoryEventStore(EventStore):
         started = time.perf_counter()
         matches = [event for event in self._all(query.tenant) if self._matches(event, query)]
         matches.sort(key=lambda e: (e.time, e.sf_ingested_at), reverse=not query.ascending)
-        window = matches[query.offset:query.offset + query.size] if query.size else []
+        window = matches[query.offset : query.offset + query.size] if query.size else []
         return SearchResult(
             total=len(matches),
             events=window,
@@ -233,7 +281,8 @@ class InMemoryEventStore(EventStore):
         if query.principal:
             needle = query.principal.lower()
             candidates = {
-                (event.principal or "").lower(), (event.target_principal or "").lower(),
+                (event.principal or "").lower(),
+                (event.target_principal or "").lower(),
             }
             if needle not in candidates:
                 return False
@@ -270,8 +319,9 @@ class InMemoryEventStore(EventStore):
 
         return execute_dsl(body, self._all(tenant))
 
-    def stats(self, tenant: Optional[str] = None,
-              since: Optional[datetime] = None) -> Dict[str, Any]:
+    def stats(
+        self, tenant: Optional[str] = None, since: Optional[datetime] = None
+    ) -> Dict[str, Any]:
         events = self._all(tenant)
         if since:
             events = [event for event in events if event.time >= since]
@@ -281,7 +331,9 @@ class InMemoryEventStore(EventStore):
             by_class[event.class_name or str(event.class_uid)] = (
                 by_class.get(event.class_name or str(event.class_uid), 0) + 1
             )
-            by_severity[event.severity or "Unknown"] = by_severity.get(event.severity or "Unknown", 0) + 1
+            by_severity[event.severity or "Unknown"] = (
+                by_severity.get(event.severity or "Unknown", 0) + 1
+            )
         return {
             "total": len(events),
             "by_class": by_class,
@@ -310,10 +362,12 @@ INDEX_TEMPLATE: Dict[str, Any] = {
         },
         "mappings": {
             "dynamic_templates": [
-                {"strings_as_keyword": {
-                    "match_mapping_type": "string",
-                    "mapping": {"type": "keyword", "ignore_above": 4096},
-                }}
+                {
+                    "strings_as_keyword": {
+                        "match_mapping_type": "string",
+                        "mapping": {"type": "keyword", "ignore_above": 4096},
+                    }
+                }
             ],
             "properties": {
                 "time": {"type": "date"},
@@ -426,13 +480,17 @@ class OpenSearchEventStore(EventStore):
     def _bulk(self, events: Sequence[OcsfEvent]) -> Tuple[int, int, List[OcsfEvent]]:
         lines: List[str] = []
         for event in events:
-            lines.append(json.dumps({
-                "index": {
-                    "_index": self.index_name(event),
-                    # Content hash as _id makes re-delivery a no-op overwrite.
-                    "_id": event.sf_dedup_key or event.compute_dedup_key(),
-                }
-            }))
+            lines.append(
+                json.dumps(
+                    {
+                        "index": {
+                            "_index": self.index_name(event),
+                            # Content hash as _id makes re-delivery a no-op overwrite.
+                            "_id": event.sf_dedup_key or event.compute_dedup_key(),
+                        }
+                    }
+                )
+            )
             lines.append(json.dumps(event.to_document(), default=str))
         response = self.client.bulk(body="\n".join(lines) + "\n", refresh=False)
         indexed = duplicates = 0
@@ -450,8 +508,7 @@ class OpenSearchEventStore(EventStore):
             elif status in (429, 502, 503, 504):
                 retryable.append(event)
             else:
-                log.error("event rejected", extra={"status": status,
-                                                   "error": outcome.get("error")})
+                log.error("event rejected", extra={"status": status, "error": outcome.get("error")})
         return indexed, duplicates, retryable
 
     def _backoff(self, attempt: int) -> float:
@@ -463,8 +520,9 @@ class OpenSearchEventStore(EventStore):
         with self.spool_path.open("a", encoding="utf-8") as handle:
             for event in events:
                 handle.write(json.dumps(event.to_document(), default=str) + "\n")
-        log.error("events spooled for retry", extra={"count": len(events),
-                                                     "path": str(self.spool_path)})
+        log.error(
+            "events spooled for retry", extra={"count": len(events), "path": str(self.spool_path)}
+        )
         return len(events)
 
     def flush_spool(self) -> IndexResult:
@@ -472,8 +530,7 @@ class OpenSearchEventStore(EventStore):
         if not self.spool_path.exists():
             return IndexResult()
         with self.spool_path.open("r", encoding="utf-8") as handle:
-            events = [OcsfEvent.model_validate(json.loads(line))
-                      for line in handle if line.strip()]
+            events = [OcsfEvent.model_validate(json.loads(line)) for line in handle if line.strip()]
         if not events:
             return IndexResult()
         working = self.spool_path.with_suffix(".inflight")
@@ -511,12 +568,11 @@ class OpenSearchEventStore(EventStore):
             query.setdefault("bool", {}).setdefault("filter", []).append(
                 {"term": {"sf_tenant": tenant}}
             )
-        return self.client.search(
-            index="%s-*" % self.settings.opensearch_index_prefix, body=body
-        )
+        return self.client.search(index="%s-*" % self.settings.opensearch_index_prefix, body=body)
 
-    def stats(self, tenant: Optional[str] = None,
-              since: Optional[datetime] = None) -> Dict[str, Any]:
+    def stats(
+        self, tenant: Optional[str] = None, since: Optional[datetime] = None
+    ) -> Dict[str, Any]:
         body: Dict[str, Any] = {
             "size": 0,
             "query": {"bool": {"filter": []}},
@@ -528,22 +584,29 @@ class OpenSearchEventStore(EventStore):
         if tenant:
             body["query"]["bool"]["filter"].append({"term": {"sf_tenant": tenant}})
         if since:
-            body["query"]["bool"]["filter"].append(
-                {"range": {"time": {"gte": since.isoformat()}}}
-            )
+            body["query"]["bool"]["filter"].append({"range": {"time": {"gte": since.isoformat()}}})
         try:
             response = self.raw_search(body)
         except Exception as exc:
             log.warning("stats query failed", extra={"error": str(exc)})
-            return {"total": 0, "by_class": {}, "by_severity": {}, "backend": "opensearch",
-                    "degraded": True}
+            return {
+                "total": 0,
+                "by_class": {},
+                "by_severity": {},
+                "backend": "opensearch",
+                "degraded": True,
+            }
         aggregations = response.get("aggregations", {})
         return {
             "total": response.get("hits", {}).get("total", {}).get("value", 0),
-            "by_class": {b["key"]: b["doc_count"]
-                         for b in aggregations.get("by_class", {}).get("buckets", [])},
-            "by_severity": {b["key"]: b["doc_count"]
-                            for b in aggregations.get("by_severity", {}).get("buckets", [])},
+            "by_class": {
+                b["key"]: b["doc_count"]
+                for b in aggregations.get("by_class", {}).get("buckets", [])
+            },
+            "by_severity": {
+                b["key"]: b["doc_count"]
+                for b in aggregations.get("by_severity", {}).get("buckets", [])
+            },
             "backend": "opensearch",
         }
 

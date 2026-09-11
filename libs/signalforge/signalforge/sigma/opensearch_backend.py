@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from .condition import And, Node, Not, Or, SearchRef, Wildcard
 from .errors import SigmaParseError
-from .matching import FieldMatcher, KeywordMatcher, _WILDCARD_RE
+from .matching import _WILDCARD_RE, FieldMatcher, KeywordMatcher
 from .pipeline import logsource_filter
 from .rule import Search, SigmaRule
 
@@ -82,15 +82,21 @@ def _field_query(matcher: FieldMatcher) -> Dict[str, Any]:
         elif "endswith" in modifiers:
             text = "*%s" % text
         if _WILDCARD_RE.search(text):
-            clauses.append({
-                "wildcard": {
-                    field_name: {"value": text, "case_insensitive": not matcher.case_sensitive}
+            clauses.append(
+                {
+                    "wildcard": {
+                        field_name: {"value": text, "case_insensitive": not matcher.case_sensitive}
+                    }
                 }
-            })
+            )
         else:
-            clauses.append({
-                "term": {field_name: {"value": text, "case_insensitive": not matcher.case_sensitive}}
-            })
+            clauses.append(
+                {
+                    "term": {
+                        field_name: {"value": text, "case_insensitive": not matcher.case_sensitive}
+                    }
+                }
+            )
     if null_clause is not None:
         clauses.append(null_clause)
     if not clauses:
@@ -100,8 +106,13 @@ def _field_query(matcher: FieldMatcher) -> Dict[str, Any]:
 
 def _keyword_query(matcher: KeywordMatcher) -> Dict[str, Any]:
     clauses = [
-        {"query_string": {"query": "*%s*" % str(value).strip("*"),
-                          "fields": ["*"], "analyze_wildcard": True}}
+        {
+            "query_string": {
+                "query": "*%s*" % str(value).strip("*"),
+                "fields": ["*"],
+                "analyze_wildcard": True,
+            }
+        }
         for value in matcher.values
     ]
     return _combine(clauses, False)
@@ -119,7 +130,9 @@ def _search_query(search: Search) -> Dict[str, Any]:
     group_queries = []
     for group in search.groups:
         clauses = [
-            _keyword_query(matcher) if isinstance(matcher, KeywordMatcher) else _field_query(matcher)
+            _keyword_query(matcher)
+            if isinstance(matcher, KeywordMatcher)
+            else _field_query(matcher)
             for matcher in group
         ]
         group_queries.append(clauses[0] if len(clauses) == 1 else {"bool": {"filter": clauses}})
@@ -171,14 +184,24 @@ def compile_rule(
     if class_uids:
         filters.append({"terms": {"class_uid": list(class_uids)}})
     if logsource.get("product"):
-        filters.append({
-            "term": {"metadata.product.vendor_name": {"value": logsource["product"],
-                                                      "case_insensitive": True}}
-        })
+        filters.append(
+            {
+                "term": {
+                    "metadata.product.vendor_name": {
+                        "value": logsource["product"],
+                        "case_insensitive": True,
+                    }
+                }
+            }
+        )
     if logsource.get("service"):
-        filters.append({
-            "term": {"metadata.log_name": {"value": logsource["service"], "case_insensitive": True}}
-        })
+        filters.append(
+            {
+                "term": {
+                    "metadata.log_name": {"value": logsource["service"], "case_insensitive": True}
+                }
+            }
+        )
     if tenant:
         filters.append({"term": {"sf_tenant": tenant}})
     if earliest or latest:
@@ -211,7 +234,7 @@ def compile_rule(
                             "bucket_selector": {
                                 "buckets_path": {"value": "distinct"},
                                 "script": "params.value %s %s"
-                                          % (_script_operator(aggregation.operator), threshold),
+                                % (_script_operator(aggregation.operator), threshold),
                             }
                         },
                     },

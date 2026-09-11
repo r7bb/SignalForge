@@ -8,7 +8,7 @@ lines when the collector could not parse them itself.
 from __future__ import annotations
 
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 from ...models.ocsf import (
     Actor,
@@ -21,37 +21,48 @@ from ...models.ocsf import (
     Os,
     Process,
     RawLogRecord,
-    SeverityId,
     Session,
+    SeverityId,
     StatusId,
     User,
 )
 from ...timeutil import parse_time
 from ..base import Mapper, NormalizationError, register
 
+#: Reused fragments: a unix account name and an IPv4/IPv6 literal.
+_USER = r"[\w.\-@$]"
+_IP = r"[\d.a-fA-F:]"
+
 # sshd
 _SSHD_ACCEPTED = re.compile(
-    r"Accepted (?P<method>\w+) for (?P<user>[\w.\-@$]+) from (?P<ip>[\d.a-fA-F:]+) port (?P<port>\d+)"
+    r"Accepted (?P<method>\w+) for (?P<user>%s+) "
+    r"from (?P<ip>%s+) port (?P<port>\d+)" % (_USER, _IP)
 )
 _SSHD_FAILED = re.compile(
-    r"Failed (?P<method>\w+) for (?:invalid user )?(?P<user>[\w.\-@$]+) from (?P<ip>[\d.a-fA-F:]+) port (?P<port>\d+)"
+    r"Failed (?P<method>\w+) for (?:invalid user )?(?P<user>%s+) "
+    r"from (?P<ip>%s+) port (?P<port>\d+)" % (_USER, _IP)
 )
-_SSHD_INVALID_USER = re.compile(
-    r"Invalid user (?P<user>[\w.\-@$]*) from (?P<ip>[\d.a-fA-F:]+)"
-)
+_SSHD_INVALID_USER = re.compile(r"Invalid user (?P<user>[\w.\-@$]*) from (?P<ip>[\d.a-fA-F:]+)")
 _SSHD_DISCONNECT = re.compile(
-    r"(?:Disconnected from|Connection closed by) (?:authenticating |invalid )?user (?P<user>[\w.\-@$]+) (?P<ip>[\d.a-fA-F:]+)"
+    r"(?:Disconnected from|Connection closed by) (?:authenticating |invalid )?"
+    r"user (?P<user>%s+) (?P<ip>%s+)" % (_USER, _IP)
 )
-_SSHD_SESSION_CLOSED = re.compile(r"pam_unix\(sshd:session\): session closed for user (?P<user>[\w.\-@$]+)")
+_SSHD_SESSION_CLOSED = re.compile(
+    r"pam_unix\(sshd:session\): session closed for user (?P<user>[\w.\-@$]+)"
+)
 _SSHD_PUBKEY = re.compile(r"Accepted publickey for (?P<user>[\w.\-@$]+)")
 
 # sudo
 _SUDO_COMMAND = re.compile(
-    r"(?P<user>[\w.\-@$]+) : TTY=\S+ ; PWD=(?P<pwd>\S+) ; USER=(?P<target>[\w.\-@$]+) ; COMMAND=(?P<cmd>.+)$"
+    r"(?P<user>%s+) : TTY=\S+ ; PWD=(?P<pwd>\S+) ; "
+    r"USER=(?P<target>%s+) ; COMMAND=(?P<cmd>.+)$" % (_USER, _USER)
 )
-_SUDO_FAILURE = re.compile(r"(?P<user>[\w.\-@$]+) : (?:\d+ incorrect password attempts?|user NOT in sudoers)")
+_SUDO_FAILURE = re.compile(
+    r"(?P<user>[\w.\-@$]+) : (?:\d+ incorrect password attempts?|user NOT in sudoers)"
+)
 _SUDO_SESSION_OPEN = re.compile(
-    r"pam_unix\(sudo:session\): session opened for user (?P<target>[\w.\-@$]+)(?:\(uid=\d+\))? by (?P<user>[\w.\-@$]*)"
+    r"pam_unix\(sudo:session\): session opened for user (?P<target>%s+)"
+    r"(?:\(uid=\d+\))? by (?P<user>%s*)" % (_USER, _USER)
 )
 
 # shadow-utils
@@ -101,10 +112,15 @@ class LinuxMapper(Mapper):
             or (record.source.split(".", 1)[1] if "." in record.source else "")
         ).lower()
         hostname = payload.get("host") or payload.get("hostname") or payload.get("_HOSTNAME")
-        timestamp = parse_time(
-            payload.get("timestamp") or payload.get("@timestamp") or payload.get("__REALTIME_TIMESTAMP"),
-            reference=record.received_at,
-        ) or record.received_at
+        timestamp = (
+            parse_time(
+                payload.get("timestamp")
+                or payload.get("@timestamp")
+                or payload.get("__REALTIME_TIMESTAMP"),
+                reference=record.received_at,
+            )
+            or record.received_at
+        )
 
         device = Device(
             hostname=str(hostname) if hostname else None,
@@ -142,7 +158,9 @@ class LinuxMapper(Mapper):
         return event
 
     # -- sshd -------------------------------------------------------------
-    def _map_sshd(self, payload: Dict[str, object], message: str, program: str) -> Optional[OcsfEvent]:
+    def _map_sshd(
+        self, payload: Dict[str, object], message: str, program: str
+    ) -> Optional[OcsfEvent]:
         match = _SSHD_ACCEPTED.search(message)
         if match:
             return OcsfEvent(
@@ -197,7 +215,9 @@ class LinuxMapper(Mapper):
         return None
 
     # -- sudo -------------------------------------------------------------
-    def _map_sudo(self, payload: Dict[str, object], message: str, program: str) -> Optional[OcsfEvent]:
+    def _map_sudo(
+        self, payload: Dict[str, object], message: str, program: str
+    ) -> Optional[OcsfEvent]:
         match = _SUDO_COMMAND.search(message)
         if match:
             target = match.group("target")
@@ -321,13 +341,17 @@ class LinuxMapper(Mapper):
             return OcsfEvent(
                 class_uid=ClassUid.PROCESS_ACTIVITY,
                 activity_id=1,
-                status_id=StatusId.SUCCESS if payload.get("success", "yes") in (True, "yes") else StatusId.FAILURE,
+                status_id=StatusId.SUCCESS
+                if payload.get("success", "yes") in (True, "yes")
+                else StatusId.FAILURE,
                 actor=Actor(
                     user=actor_user,
                     process=Process(
                         name=str(payload.get("exe") or payload.get("comm") or ""),
                         cmd_line=str(payload.get("cmdline") or message),
-                        pid=int(payload["pid"]) if str(payload.get("pid") or "").isdigit() else None,
+                        pid=int(payload["pid"])
+                        if str(payload.get("pid") or "").isdigit()
+                        else None,
                     ),
                 ),
                 unmapped={"audit_type": audit_type, "key": payload.get("key")},

@@ -14,8 +14,8 @@ from ...models.ocsf import (
     OcsfEvent,
     RawLogRecord,
     Resource,
-    SeverityId,
     Session,
+    SeverityId,
     StatusId,
     User,
 )
@@ -65,9 +65,9 @@ class OktaMapper(Mapper):
         result = str(outcome.get("result") or "").upper()
         actor_raw = payload.get("actor") or {}
         client = payload.get("client") or {}
-        geo = ((client.get("geographicalContext") or {}))
+        geo = client.get("geographicalContext") or {}
         targets = payload.get("target") or []
-        debug = ((payload.get("debugContext") or {}).get("debugData") or {})
+        debug = (payload.get("debugContext") or {}).get("debugData") or {}
 
         class_uid, activity_id, severity = _EVENT_MAP.get(
             str(event_type), (ClassUid.ENTITY_MANAGEMENT, 99, SeverityId.INFORMATIONAL)
@@ -81,9 +81,7 @@ class OktaMapper(Mapper):
         else:
             status_id = StatusId.OTHER
 
-        target_user = next(
-            (t for t in targets if str(t.get("type", "")).lower() == "user"), None
-        )
+        target_user = next((t for t in targets if str(t.get("type", "")).lower() == "user"), None)
         target_group = next(
             (t for t in targets if str(t.get("type", "")).lower() in {"usergroup", "group"}), None
         )
@@ -91,7 +89,7 @@ class OktaMapper(Mapper):
         if privileges and any(hint in " ".join(privileges).lower() for hint in _ADMIN_HINTS):
             severity = max(severity, SeverityId.HIGH)
 
-        user_agent = (client.get("userAgent") or {})
+        user_agent = client.get("userAgent") or {}
         event = OcsfEvent(
             class_uid=class_uid,
             activity_id=activity_id,
@@ -143,7 +141,7 @@ class OktaMapper(Mapper):
             ),
             dst_endpoint=Endpoint(svc_name="okta", hostname="okta.com"),
             device=Device(
-                type=user_agent.get("os") and "User Device" or None,
+                type=(user_agent.get("os") and "User Device") or None,
                 os=None,
                 hostname=client.get("device"),
             ),
@@ -157,8 +155,11 @@ class OktaMapper(Mapper):
             is_mfa=_mfa(payload),
             logon_type=(payload.get("authenticationContext") or {}).get("credentialType"),
             resources=[
-                Resource(uid=t.get("id"), name=t.get("displayName") or t.get("alternateId"),
-                         type=t.get("type"))
+                Resource(
+                    uid=t.get("id"),
+                    name=t.get("displayName") or t.get("alternateId"),
+                    type=t.get("type"),
+                )
                 for t in targets
                 if str(t.get("type", "")).lower() in {"appinstance", "apitoken", "app"}
             ],
@@ -184,9 +185,11 @@ class OktaMapper(Mapper):
 
 def _mfa(payload: Dict[str, Any]) -> Optional[bool]:
     context = payload.get("authenticationContext") or {}
-    if "authenticationStep" in context and str(payload.get("eventType", "")).endswith("auth_via_mfa"):
+    if "authenticationStep" in context and str(payload.get("eventType", "")).endswith(
+        "auth_via_mfa"
+    ):
         return True
-    factor = (context.get("credentialProvider") or context.get("credentialType") or "")
+    factor = context.get("credentialProvider") or context.get("credentialType") or ""
     if factor:
         return str(factor).upper() not in {"PASSWORD", "OKTA_CREDENTIAL_PROVIDER"}
     return None

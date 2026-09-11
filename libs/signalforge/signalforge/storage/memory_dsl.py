@@ -13,7 +13,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from ..models.ocsf import OcsfEvent, flatten_event
 from ..sigma.matching import glob_to_regex
@@ -34,7 +34,7 @@ def execute_dsl(body: Dict[str, Any], events: Sequence[OcsfEvent]) -> Dict[str, 
 
     size = int(body.get("size", 10))
     offset = int(body.get("from", 0))
-    window = matches[offset:offset + size] if size else []
+    window = matches[offset : offset + size] if size else []
     response: Dict[str, Any] = {
         "took": 0,
         "timed_out": False,
@@ -52,9 +52,7 @@ def execute_dsl(body: Dict[str, Any], events: Sequence[OcsfEvent]) -> Dict[str, 
     }
     aggs = body.get("aggs") or body.get("aggregations")
     if aggs:
-        response["aggregations"] = {
-            name: _aggregate(spec, matches) for name, spec in aggs.items()
-        }
+        response["aggregations"] = {name: _aggregate(spec, matches) for name, spec in aggs.items()}
     return response
 
 
@@ -84,9 +82,11 @@ def _match(clause: Dict[str, Any], flat: Dict[str, Any], event: OcsfEvent) -> bo
         field, spec = next(iter(options.items()))
         prefix, case_insensitive = _spec(spec)
         return any(
-            str(o).lower().startswith(str(prefix).lower()) if case_insensitive
+            str(o).lower().startswith(str(prefix).lower())
+            if case_insensitive
             else str(o).startswith(str(prefix))
-            for o in _values(flat, field) if o is not None
+            for o in _values(flat, field)
+            if o is not None
         )
     if kind == "regexp":
         field, spec = next(iter(options.items()))
@@ -145,33 +145,38 @@ def _match_term(options: Dict[str, Any], flat: Dict[str, Any]) -> bool:
     return any(_eq(item, value, not case_insensitive) for item in observed)
 
 
-def _match_range(field: str, bounds: Dict[str, Any], flat: Dict[str, Any],
-                 event: OcsfEvent) -> bool:
+def _match_range(
+    field: str, bounds: Dict[str, Any], flat: Dict[str, Any], event: OcsfEvent
+) -> bool:
     for item in _values(flat, field):
         if item is None:
             continue
         left = _comparable(item)
         if left is None:
             continue
-        ok = True
-        for operator, raw in bounds.items():
-            right = _comparable(raw)
-            if right is None or not isinstance(right, type(left)):
-                right = _coerce_like(left, raw)
-            if right is None:
-                ok = False
-                break
-            if operator == "gte" and not left >= right:
-                ok = False
-            elif operator == "gt" and not left > right:
-                ok = False
-            elif operator == "lte" and not left <= right:
-                ok = False
-            elif operator == "lt" and not left < right:
-                ok = False
-        if ok:
+        if all(_within_bound(left, operator, raw) for operator, raw in bounds.items()):
             return True
     return False
+
+
+#: Range operator -> the comparison it asserts.
+_RANGE_OPERATORS = {
+    "gte": lambda left, right: left >= right,
+    "gt": lambda left, right: left > right,
+    "lte": lambda left, right: left <= right,
+    "lt": lambda left, right: left < right,
+}
+
+
+def _within_bound(left: Any, operator: str, raw: Any) -> bool:
+    right = _comparable(raw)
+    if right is None or not isinstance(right, type(left)):
+        right = _coerce_like(left, raw)
+    if right is None:
+        return False
+    compare = _RANGE_OPERATORS.get(operator)
+    # An unrecognised bound is ignored rather than treated as a match.
+    return compare(left, right) if compare else False
 
 
 # --------------------------------------------------------------------------- #
@@ -206,7 +211,10 @@ def _aggregate(spec: Dict[str, Any], matches: Sequence[Any]) -> Dict[str, Any]:
         if cardinality_field:
             name, card_field = cardinality_field
             distinct = {
-                value for _, flat in rows for value in _values(flat, card_field) if value is not None
+                value
+                for _, flat in rows
+                for value in _values(flat, card_field)
+                if value is not None
             }
             bucket[name] = {"value": len(distinct)}
         if bucket["doc_count"] < min_doc_count:
@@ -237,8 +245,12 @@ def _bucket_selector(selector: Dict[str, Any], bucket: Dict[str, Any]) -> bool:
         return False
     value = float(value)
     return {
-        ">": value > threshold, ">=": value >= threshold, "<": value < threshold,
-        "<=": value <= threshold, "==": value == threshold, "!=": value != threshold,
+        ">": value > threshold,
+        ">=": value >= threshold,
+        "<": value < threshold,
+        "<=": value <= threshold,
+        "==": value == threshold,
+        "!=": value != threshold,
     }[operator]
 
 
@@ -258,7 +270,7 @@ def _spec(spec: Any) -> Any:
     return spec, False
 
 
-def _values(flat: Dict[str, Any], field: Optional[str]) -> List[Any]:
+def _values(flat: Dict[str, Any], field: Optional[str]) -> Optional[List[Any]]:
     if not field or field not in flat:
         return []
     value = flat[field]

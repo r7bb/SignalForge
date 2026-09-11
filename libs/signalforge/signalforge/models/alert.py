@@ -61,8 +61,8 @@ class Alert(BaseModel):
     references: List[str] = Field(default_factory=list)
 
     # Scoring
-    severity: int = 5           # 1-10, from rule level
-    confidence: int = 7         # 1-10, from rule metadata
+    severity: int = 5  # 1-10, from rule level
+    confidence: int = 7  # 1-10, from rule metadata
     asset_criticality: int = 5  # 1-10, from the asset inventory
     context_modifier: float = 1.0
     risk_score: int = 0
@@ -97,7 +97,7 @@ class Alert(BaseModel):
     suppressed_reason: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
 
-    def model_post_init(self, __context: Any) -> None:  # noqa: D105
+    def model_post_init(self, __context: Any) -> None:
         if not self.dedup_key:
             self.dedup_key = self.compute_dedup_key()
 

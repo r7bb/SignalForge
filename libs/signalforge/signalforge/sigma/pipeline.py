@@ -38,8 +38,11 @@ CATEGORY_TO_CLASS: Dict[str, List[int]] = {
         ClassUid.USER_ACCESS_MANAGEMENT,
         ClassUid.GROUP_MANAGEMENT,
     ],
-    "privilege": [ClassUid.USER_ACCESS_MANAGEMENT, ClassUid.AUTHORIZE_SESSION,
-                  ClassUid.GROUP_MANAGEMENT],
+    "privilege": [
+        ClassUid.USER_ACCESS_MANAGEMENT,
+        ClassUid.AUTHORIZE_SESSION,
+        ClassUid.GROUP_MANAGEMENT,
+    ],
     "process_creation": [ClassUid.PROCESS_ACTIVITY],
     "process": [ClassUid.PROCESS_ACTIVITY],
     "file_event": [ClassUid.FILE_SYSTEM_ACTIVITY],
@@ -178,8 +181,13 @@ def event_logsource(event: OcsfEvent) -> Dict[str, Optional[str]]:
     category = None
     for name, class_uids in CATEGORY_TO_CLASS.items():
         if event.class_uid in class_uids and name in {
-            "authentication", "iam", "process_creation", "file_event", "api",
-            "datastore", "webserver",
+            "authentication",
+            "iam",
+            "process_creation",
+            "file_event",
+            "api",
+            "datastore",
+            "webserver",
         }:
             category = name
             break

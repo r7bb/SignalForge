@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import yaml
 
@@ -172,12 +172,16 @@ def load_ruleset(
         messages = ["%s -> %s" % pair for pair in unresolved]
         if strict:
             raise SigmaParseError("unresolved correlation references: %s" % ", ".join(messages))
-        ruleset.errors.extend(("correlation:%s" % cid, "unresolved reference %r" % ref)
-                              for cid, ref in unresolved)
+        ruleset.errors.extend(
+            ("correlation:%s" % cid, "unresolved reference %r" % ref) for cid, ref in unresolved
+        )
     log.info(
         "loaded ruleset",
-        extra={"rules": len(ruleset.rules), "correlations": len(ruleset.correlations),
-               "errors": len(ruleset.errors)},
+        extra={
+            "rules": len(ruleset.rules),
+            "correlations": len(ruleset.correlations),
+            "errors": len(ruleset.errors),
+        },
     )
     return ruleset
 
