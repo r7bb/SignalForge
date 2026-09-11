@@ -32,6 +32,7 @@ var/
 .vscode/*
 !.vscode/extensions.json
 
-# Load test + benchmark output
+# Load test output; the published benchmark report is committed as evidence
 tests/load/results/
 benchmarks/*.json
+!benchmarks/latest.json

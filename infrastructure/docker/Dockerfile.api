@@ -1,0 +1,44 @@
+# SignalForge API image.
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Dependencies first, so application edits do not invalidate the layer.
+COPY libs/signalforge/pyproject.toml libs/signalforge/README.md /app/libs/signalforge/
+COPY libs/signalforge/signalforge/__init__.py /app/libs/signalforge/signalforge/__init__.py
+RUN pip install --no-cache-dir \
+      "/app/libs/signalforge[stream,worker,otel]" \
+      "uvicorn[standard]>=0.30" \
+      "fastapi>=0.115" \
+      "python-multipart>=0.0.9" \
+      "psycopg[binary]>=3.2"
+
+COPY libs/signalforge /app/libs/signalforge
+COPY apps/api /app/apps/api
+COPY services /app/services
+COPY detections /app/detections
+COPY schemas /app/schemas
+
+RUN pip install --no-cache-dir --no-deps -e /app/libs/signalforge \
+ && mkdir -p /app/var/spool \
+ && useradd --create-home --uid 10001 signalforge \
+ && chown -R signalforge:signalforge /app/var
+
+ENV PYTHONPATH=/app/libs/signalforge:/app/apps/api:/app
+USER signalforge
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+  CMD curl -fs http://localhost:8000/api/v1/health/live || exit 1
+
+CMD ["uvicorn", "app.main:app", "--app-dir", "/app/apps/api", \
+     "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

@@ -1,0 +1,31 @@
+# Shared image for the streaming services and the Celery worker.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+COPY libs/signalforge/pyproject.toml libs/signalforge/README.md /app/libs/signalforge/
+COPY libs/signalforge/signalforge/__init__.py /app/libs/signalforge/signalforge/__init__.py
+RUN pip install --no-cache-dir \
+      "/app/libs/signalforge[stream,worker,otel]" \
+      "psycopg[binary]>=3.2"
+
+COPY libs/signalforge /app/libs/signalforge
+COPY services /app/services
+COPY detections /app/detections
+COPY schemas /app/schemas
+
+RUN pip install --no-cache-dir --no-deps -e /app/libs/signalforge \
+ && mkdir -p /app/var/spool \
+ && useradd --create-home --uid 10001 signalforge \
+ && chown -R signalforge:signalforge /app/var
+
+ENV PYTHONPATH=/app/libs/signalforge:/app
+USER signalforge
+
+# Overridden per service in docker-compose.yml.
+CMD ["python", "-m", "services.normalizer.main"]

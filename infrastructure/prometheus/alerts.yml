@@ -1,0 +1,65 @@
+# Platform health alerts - "is the SIEM itself healthy", not security detections.
+groups:
+  - name: signalforge-pipeline
+    interval: 30s
+    rules:
+      - alert: SignalForgeIngestionStalled
+        expr: rate(signalforge_events_normalized_total[5m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: No events normalized for ten minutes
+          description: >
+            The pipeline has stopped producing normalized events. Check the
+            collector and normalizer services and the bus consumer lag.
+
+      - alert: SignalForgeConsumerLagGrowing
+        expr: signalforge_consumer_lag > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Consumer group {{ $labels.group }} is behind
+          description: Lag above 10k records on {{ $labels.topic }} for five minutes.
+
+      - alert: SignalForgeEventsSpooled
+        expr: signalforge_spooled_events > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Events are spooled to disk
+          description: >
+            The event store rejected writes and events are parked on disk.
+            They are retried every minute; check OpenSearch health.
+
+      - alert: SignalForgeDetectionLatencyHigh
+        expr: histogram_quantile(0.95, rate(signalforge_detection_latency_seconds_bucket[5m])) > 0.25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: p95 detection latency above 250 ms
+          description: Rule evaluation is slow; check rule count and window sizes.
+
+      - alert: SignalForgeNormalizationFailures
+        expr: rate(signalforge_normalization_failures_total[10m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Records are being dead-lettered
+          description: >
+            {{ $labels.source }} is failing to normalize ({{ $labels.reason }}).
+            A mapper probably needs updating for a new log shape.
+
+      - alert: SignalForgeApiErrors
+        expr: |
+          sum(rate(signalforge_api_request_seconds_count{status=~"5.."}[5m]))
+            / sum(rate(signalforge_api_request_seconds_count[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: API 5xx rate above 5%

@@ -1,0 +1,125 @@
+# Vector: collect host and application logs, wrap them in SignalForge's raw
+# envelope and publish to Kafka/Redpanda.
+#
+# The envelope is deliberately thin - Vector does no parsing beyond adding the
+# `source` key that tells the normalizer which mapper to use. All schema work
+# happens in one place (signalforge.normalize), so a new source is a mapper
+# plus a Vector entry, never a change to the detections.
+
+data_dir: /var/lib/vector
+
+sources:
+  linux_auth:
+    type: file
+    include:
+      - /host/var/log/auth.log
+      - /host/var/log/secure
+    read_from: end
+    ignore_older_secs: 86400
+
+  linux_audit:
+    type: file
+    include:
+      - /host/var/log/audit/audit.log
+    read_from: end
+    ignore_older_secs: 86400
+
+  app_audit:
+    type: file
+    include:
+      - /host/var/log/signalforge-lab/app-audit.jsonl
+    read_from: end
+
+  cloudtrail:
+    type: file
+    include:
+      - /host/var/log/signalforge-lab/cloudtrail/*.json
+    read_from: beginning
+
+  internal_metrics:
+    type: internal_metrics
+
+transforms:
+  wrap_linux_auth:
+    type: remap
+    inputs: [linux_auth]
+    source: |
+      # sshd/sudo/useradd lines stay raw: the Linux mapper parses RFC3164.
+      .= {
+        "source": if includes(["sudo"], .message) { "linux.sudo" } else { "linux.sshd" },
+        "tenant": get_env_var!("SIGNALFORGE_TENANT"),
+        "raw": .message,
+        "collector": "vector",
+        "received_at": format_timestamp!(now(), format: "%+")
+      }
+
+  wrap_linux_audit:
+    type: remap
+    inputs: [linux_audit]
+    source: |
+      .= {
+        "source": "linux.auditd",
+        "tenant": get_env_var!("SIGNALFORGE_TENANT"),
+        "raw": .message,
+        "collector": "vector",
+        "received_at": format_timestamp!(now(), format: "%+")
+      }
+
+  wrap_app_audit:
+    type: remap
+    inputs: [app_audit]
+    source: |
+      payload, err = parse_json(.message)
+      if err != null {
+        payload = { "message": .message }
+      }
+      .= {
+        "source": "app.audit",
+        "tenant": get_env_var!("SIGNALFORGE_TENANT"),
+        "payload": payload,
+        "collector": "vector",
+        "received_at": format_timestamp!(now(), format: "%+")
+      }
+
+  wrap_cloudtrail:
+    type: remap
+    inputs: [cloudtrail]
+    source: |
+      payload, err = parse_json(.message)
+      if err != null {
+        abort
+      }
+      .= {
+        "source": "aws.cloudtrail",
+        "tenant": get_env_var!("SIGNALFORGE_TENANT"),
+        "payload": payload,
+        "collector": "vector",
+        "received_at": format_timestamp!(now(), format: "%+")
+      }
+
+sinks:
+  signalforge_raw:
+    type: kafka
+    inputs:
+      - wrap_linux_auth
+      - wrap_linux_audit
+      - wrap_app_audit
+      - wrap_cloudtrail
+    bootstrap_servers: redpanda:9092
+    topic: sf.logs.raw
+    compression: gzip
+    encoding:
+      codec: json
+    batch:
+      max_events: 500
+      timeout_secs: 1
+    buffer:
+      # Disk buffer: a broker outage does not lose telemetry.
+      type: disk
+      max_size: 268435488
+      when_full: block
+
+  metrics:
+    type: prometheus_exporter
+    inputs: [internal_metrics]
+    address: 0.0.0.0:9598

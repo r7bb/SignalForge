@@ -1,0 +1,103 @@
+{
+  "uid": "signalforge-pipeline",
+  "title": "SignalForge - pipeline health",
+  "tags": ["signalforge"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Ingestion throughput (events/sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(signalforge_events_normalized_total[1m]))",
+          "legendFormat": "normalized"
+        },
+        {
+          "expr": "sum(rate(signalforge_events_indexed_total[1m]))",
+          "legendFormat": "indexed"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Detection latency (p50 / p95 / p99)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(signalforge_detection_latency_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(signalforge_detection_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(signalforge_detection_latency_seconds_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumer lag by group",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "signalforge_consumer_lag", "legendFormat": "{{group}} {{topic}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Alerts by risk level",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (risk_level) (rate(signalforge_alerts_total[5m]))",
+          "legendFormat": "{{risk_level}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Events spooled (unwritten)",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 16 },
+      "targets": [{ "expr": "signalforge_spooled_events" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Rules loaded",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 16 },
+      "targets": [{ "expr": "sum(signalforge_rules_loaded)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Open sliding windows",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 16 },
+      "targets": [{ "expr": "sum(signalforge_windows_open)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Dead-lettered records (1h)",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 16 },
+      "targets": [{ "expr": "sum(increase(signalforge_normalization_failures_total[1h]))" }]
+    }
+  ]
+}

@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  SIGNALFORGE_BUS_BACKEND: memory
+  SIGNALFORGE_EVENT_STORE_BACKEND: memory
+
+jobs:
+  detections:
+    name: Detection rules (lint + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "libs/signalforge[dev]"
+      - name: Lint detection rules
+        # The gate on every detection PR: metadata, ATT&CK tags, resolvable
+        # correlation references, OCSF field names, and a test file per rule.
+        run: python scripts/validate_rules.py detections --format github
+      - name: Run detection tests
+        run: pytest tests/detections -q
+
+  python-tests:
+    name: Python (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "libs/signalforge[dev,stream,worker]"
+          pip install "fastapi>=0.115" "uvicorn[standard]" python-multipart
+      - name: Lint
+        run: |
+          ruff check libs services apps/api tests scripts
+          ruff format --check libs services apps/api tests scripts
+      - name: Type check
+        run: mypy libs/signalforge/signalforge apps/api/app
+        continue-on-error: true
+      - name: Unit and integration tests
+        run: pytest tests/unit tests/integration tests/detections -q --cov --cov-report=xml
+      - name: End-to-end API tests
+        run: pytest tests/e2e -q
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  dashboard:
+    name: Dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Type check
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  integration-stack:
+    name: Integration against OpenSearch + Redpanda + PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      opensearch:
+        image: opensearchproject/opensearch:2.17.1
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports: ["9200:9200"]
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health"
+          --health-interval 10s --health-timeout 5s --health-retries 20
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: signalforge
+          POSTGRES_PASSWORD: signalforge
+          POSTGRES_DB: signalforge
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      SIGNALFORGE_EVENT_STORE_BACKEND: opensearch
+      SIGNALFORGE_OPENSEARCH_URL: http://localhost:9200
+      SIGNALFORGE_DATABASE_URL: postgresql+psycopg://signalforge:signalforge@localhost:5432/signalforge
+      SIGNALFORGE_REDIS_URL: redis://localhost:6379/0
+      SIGNALFORGE_RUN_BACKEND_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "libs/signalforge[dev,stream]" "psycopg[binary]"
+      - name: Backend integration tests
+        run: pytest tests/integration -q -m "not load"
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.api
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.worker
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
