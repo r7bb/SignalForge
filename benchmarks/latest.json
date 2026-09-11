@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-09-11T04:34:14.088126+00:00",
+  "environment": {
+    "python": "3.9.6",
+    "platform": "macOS-26.6-arm64-arm-64bit",
+    "processor": "arm",
+    "cpu_count": 14,
+    "event_store": "memory",
+    "bus": "memory",
+    "database": "sqlite+pysqlite"
+  },
+  "workload": {
+    "records": 20000,
+    "events": 20000,
+    "normalization_failures": 0,
+    "batch_size": 500,
+    "requested_rate": 1000
+  },
+  "throughput": {
+    "generation_events_per_second": 119419.11556710274,
+    "normalization_events_per_second": 9965.076557121674,
+    "pipeline_events_per_second": 3602.9756523378915,
+    "pipeline_seconds": 5.550967292
+  },
+  "detection_latency_ms": {
+    "mean": 0.2775154016999998,
+    "p50": 0.24782516600000012,
+    "p95": 0.42054808400000004,
+    "p99": 0.529661666,
+    "max": 0.529661666,
+    "engine_mean": 0.0856574243607034
+  },
+  "outcomes": {
+    "accepted": 20000,
+    "stored": 19983,
+    "deduplicated": 17,
+    "lost": 0,
+    "rules_evaluated": 24506,
+    "alerts": 2577,
+    "alerts_deduped": 4607,
+    "alerts_suppressed": 0,
+    "incidents": 25,
+    "windows_open": 5
+  }
+}
