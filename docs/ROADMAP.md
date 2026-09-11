@@ -83,6 +83,137 @@ authentication event all the way through, then widen.
 
 ---
 
+## Phase 7 — multi-analyst operations (planned, designed)
+
+Today SignalForge is a single-analyst tool: an incident has one free-text
+`owner`, and anyone with the `analyst` role can move it through the state
+machine. A real SOC runs on **queues, shifts and handovers** — an incident is
+opened by a detection, routed to a team, claimed by a person, escalated to
+another team when it turns out to be something else, and closed by someone
+accountable. That is the next substantial piece of work, and it is additive:
+the state machine, the audit trail and the tenancy model already carry it.
+
+### What already supports this
+
+| Existing piece | What it gives us |
+|---|---|
+| `IncidentStatus` + `ALLOWED_TRANSITIONS` | A validated lifecycle; illegal moves are already a `409` |
+| `Incident.owner` + `assign()` | Single-assignee ownership with an audit entry |
+| `IncidentNote`, `TimelineEntry` | Per-author commentary, already rendered chronologically |
+| `AuditLog` | Every transition, assignment, note and response action, with actor |
+| Role hierarchy + four-eyes approval | The precedent for "who is allowed to do this" |
+| Per-tenant isolation | Teams nest inside a tenant with no extra isolation work |
+
+### What needs building
+
+**1. Teams and queues.** New tables: `teams` (tenant, name, slug, description),
+`team_members` (team, user, `lead`/`member`), and `incidents.team_id`. An
+incident belongs to a *queue* (a team) before it belongs to a person, so
+nothing is ever invisible just because no individual has picked it up.
+
+**2. Routing rules.** `routing_rules` (tenant, priority, match, team): match on
+scenario, correlation id, severity, ATT&CK tactic, asset criticality or source,
+first match wins, with a documented default queue as the fallback. This is
+detection-as-code's sibling — routing belongs in git for the same reasons, so
+the rules should live in `routing/` as YAML and be linted like detections are.
+
+**3. Claim / transfer semantics.**
+
+```
+             route                claim                 transfer
+ detection ────────▶ team queue ────────▶ analyst ──────────────▶ other team
+                          ▲                  │                        │
+                          └──── unclaim ─────┘                        ▼
+                                                              (reason required)
+```
+
+- `claim` sets `assignee_id` and stamps `acknowledged_at`.
+- `unclaim` returns it to the queue (audited, so churn is visible).
+- `transfer` requires a target team **and a reason** — "moved to Cloud Security
+  because the credential was an IAM key, not an app token" is the sentence the
+  next shift needs.
+- Closing requires an assignee, so nothing is resolved by nobody.
+
+**4. A `waiting` state.** The current machine has no way to say "parked pending
+a reply from the account owner". Add `WAITING` with a required wake-up time and
+a reason; the worker re-surfaces it when the timer expires. Without this,
+analysts park cases by leaving them in `INVESTIGATING`, and the queue lies.
+
+**5. Per-transition permissions.** Right now any `analyst` can make any legal
+transition. Bind transitions to roles: `analyst` may triage and investigate,
+`responder` may contain, and `closed_false_positive` requires a team lead or
+admin — closing a real attack as noise should need a second pair of eyes, the
+same principle the response playbooks already enforce.
+
+**6. SLAs, and the metrics that come with them.** Per-severity targets for
+time-to-acknowledge and time-to-resolve, stored as `sla_ack_due` /
+`sla_resolve_due` when the incident opens. A worker task flags breaches,
+escalates (bump severity, notify the team lead) and records it. That gives the
+numbers a SOC is actually judged on:
+
+| Metric | Definition |
+|---|---|
+| MTTD | detection time − first event time (already derivable from the timeline) |
+| MTTA | `acknowledged_at` − `created_at`, per team and per analyst |
+| MTTR | `closed_at` − `created_at`, split by disposition |
+| Queue age | oldest unclaimed incident per queue — the number that predicts a bad week |
+| Reopen rate | incidents leaving a terminal state, per closer |
+
+**7. Concurrent editing.** Two analysts on one incident currently last-write-wins
+silently. Add an optimistic `version` column: a stale write is a `409` with the
+current state, and the UI shows "Dana updated this incident — reload". A
+short-lived presence key (Redis, ~30s TTL) drives a "Dana is viewing this"
+indicator, which prevents most collisions before they happen.
+
+**8. Collaboration surface.** Threaded comments with `@mention` (notify the
+mentioned user, add them as a watcher), explicit watchers independent of
+assignment, and case **linking and merging** — two incidents that turn out to be
+one intrusion should become one case with both evidence sets, which the
+supersession mechanism already models for the automated case.
+
+**9. Handover.** A shift-handover view and export: per queue, every open
+incident with status, assignee, age against SLA, last action and the most recent
+note. This is the artefact a shift actually hands over, and it is a read-only
+projection of data the platform already stores.
+
+**10. Notifications.** A pluggable channel interface (webhook, Slack,
+PagerDuty, email) driven off the audit stream, firing on assignment, mention,
+SLA breach and escalation. The audit log is already the event source, so this
+is a consumer, not a new pipeline.
+
+### API surface this implies
+
+```
+GET    /teams                          POST /teams
+GET    /teams/{slug}/members           POST /teams/{slug}/members
+GET    /queues/{slug}                  # the team's work, oldest-unclaimed first
+POST   /incidents/{ref}/claim          POST /incidents/{ref}/unclaim
+POST   /incidents/{ref}/transfer       { team, reason }
+POST   /incidents/{ref}/watch          DELETE /incidents/{ref}/watch
+GET    /incidents/{ref}/comments       POST /incidents/{ref}/comments
+POST   /incidents/{ref}/link           { incident, relationship }
+GET    /stats/soc                      # MTTA/MTTR/queue age by team and analyst
+GET    /handover/{slug}                # shift handover projection
+```
+
+### Dashboard changes
+
+A queue switcher (**My work · My team · Unassigned · All**), a claim button on
+every unassigned row, assignee and team chips, an SLA countdown that turns
+amber then red, the presence indicator, and a handover page. The incident view
+gains a comment thread with mentions beside the existing timeline.
+
+### Sizing, honestly
+
+Teams + routing + claim/transfer + per-transition permissions is the core and
+is roughly a week of focused work, most of it schema, service methods and
+tests. SLAs and the SOC metrics are a second chunk of similar size. Presence,
+notifications and the handover view are smaller and can follow independently.
+The migration question bites here: this adds and alters tables, so it is also
+the point at which **Alembic stops being optional** (see the gap list).
+
+---
+
 ## Named gaps, in the order I would fix them
 
 1. **Benchmark the distributed path.** The published figure (3,603 events/sec,
@@ -122,6 +253,49 @@ authentication event all the way through, then widen.
    grow without bound.
 10. **Kubernetes manifests / Helm chart.** Compose is the supported path today;
     a chart with an HPA on consumer lag is the natural next deployment target.
+11. **Schema migrations (Alembic).** `Base.metadata.create_all` adds new tables
+    but never alters existing ones, so today a changed column needs a rebuilt
+    metadata database. Phase 7 alters `incidents`, so migrations have to land
+    first or alongside it — this is the prerequisite, not a nice-to-have.
+12. **Multi-analyst operations** — the whole of Phase 7 above. It is last in
+    this list only because it is the largest, not because it matters least: for
+    anyone evaluating this as SOC tooling rather than as a detection engine, it
+    is the most conspicuous absence.
+
+## Future scope, by theme
+
+Beyond the ordered gaps, the directions worth pursuing:
+
+**Detection engineering.** Import and curate upstream SigmaHQ rules (the field
+pipeline already exists; the missing part is a triage workflow for 3,000 rules).
+Shadow mode — run a new rule for a week recording volume and matched entities
+*without* alerting, so tuning happens before anyone is paged. Coverage gap
+reporting against the ATT&CK matrix, driven off the existing `/stats/mitre`.
+A false-positive feedback loop that turns "close as FP" into a proposed rule
+filter as a pull request.
+
+**Data platform.** Replay tooling: re-run a day of raw records through a fixed
+mapper — the bus plus content-hash dedup already make this safe, it just needs
+a command. Event schema versioning for when the OCSF subset changes.
+OpenSearch ISM for tiering and retention.
+
+**Intelligence.** Per-principal baselines (usual hours, countries, resources) to
+make "unusual for *this* account" a computed signal rather than a static rule.
+MISP/STIX ingestion alongside the static feed, with indicator confidence decay
+so stale intel stops inflating scores.
+
+**Response.** Real adapters (IdP, cloud) behind an explicit consent and
+blast-radius model. Playbook dry-run diffs — show exactly what *would* change
+before approval. Rollback for every containment action.
+
+**Security hardening.** httpOnly cookie auth and rate limiting (gaps 3 and 4),
+SSO/OIDC with SCIM provisioning, per-team RBAC, and a tamper-evident audit log
+(hash-chained entries) — an audit trail that can be edited by whoever owns the
+database is weak evidence.
+
+**Reporting.** Incident report export (PDF/Markdown) for a finished
+investigation, scheduled executive digests, and per-team performance reporting
+off the Phase 7 metrics.
 
 ## Explicitly out of scope
 

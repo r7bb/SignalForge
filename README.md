@@ -568,6 +568,13 @@ shape of the deployment:
 
 The build order, what is done, and what is next: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
+The largest planned piece is **multi-analyst operations**: today an incident has
+one free-text owner, where a real SOC needs team queues, routing rules,
+claim/transfer with a reason, a `waiting` state, SLA timers with MTTA/MTTR per
+team, concurrent-edit protection and a shift-handover view. The roadmap carries
+the full design — schema, API surface and sizing — because the existing state
+machine, audit trail and tenancy model already carry most of the weight.
+
 Further reading:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — component boundaries, data flow, failure behaviour
