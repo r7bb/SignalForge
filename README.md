@@ -344,11 +344,67 @@ context and never blocks detection.
 
 ```
 NEW → TRIAGED → INVESTIGATING → CONTAINED → RESOLVED
-                         └──────────────────→ CLOSED_FALSE_POSITIVE
+         │            │  ↑                        
+         └────────────┴──┴──→ WAITING  └─────────→ CLOSED_FALSE_POSITIVE
 ```
 
 Transitions are validated (an illegal one is a `409`, not a silent write) and
 every transition, assignment, note and response action writes an audit row.
+
+`WAITING` is for work parked on something outside the SOC's control — a reply
+from the account owner, a vendor ticket. It requires both a reason and a
+wake-up time, because without it analysts park cases by leaving them in
+`INVESTIGATING` and the queue stops describing what is actually being worked.
+
+**Who may do what.** Legal-for-the-state-machine and permitted-for-this-person
+are separate questions. Containment touches real resources, so it needs the
+`responder` role. Closing a real detection as a false positive is the expensive
+mistake, so it needs `admin` — or a **lead of the owning team**, the same
+second-pair-of-eyes principle the response playbooks use.
+
+### Queues and teams
+
+An incident belongs to a *team* before it belongs to a person, so work nobody
+has picked up is still visibly somebody's:
+
+```
+  detection ──route──▶ team queue ──claim──▶ analyst ──transfer──▶ other team
+                            ▲                    │                     │
+                            └──── unclaim ───────┘            reason required
+```
+
+- **Claiming** stamps `acknowledged_at` (the clock MTTA is measured from).
+  Claiming an incident someone else holds is a `409`, not a silent takeover —
+  two analysts unknowingly working one case is exactly what this prevents. A
+  lead can `force` a reassignment when a shift ends.
+- **Transferring** demands a reason. "Moved to Cloud Security because the
+  credential was an IAM key, not an app token" is the sentence the receiving
+  team needs and the one nobody writes voluntarily.
+- **Concurrent edits** are caught by a `version` on every incident: send back
+  the version you read, and a write from a stale view is rejected with the
+  current state rather than overwriting someone's work.
+- `GET /teams/{slug}/queue` is oldest-first — the opposite of the risk-ranked
+  incident list, because a queue is worked from the bottom and the oldest
+  unclaimed item is the one most likely to breach. `GET /teams/{slug}/handover`
+  is the shift-handover projection: every open case with its last action.
+
+### Database migrations
+
+The metadata schema is versioned with Alembic. `alembic upgrade head` runs when
+a service opens the database (`SIGNALFORGE_DB_AUTO_MIGRATE`, on by default);
+turn it off where migrations are applied as a separate ordered step.
+
+```bash
+make migrate                        # alembic upgrade head
+make migration m="add sla columns"  # autogenerate a revision from model changes
+make migration-status               # current revision + un-migrated model drift
+```
+
+The test suite builds each throwaway database straight from the models because
+it is faster, which would let the two drift apart silently — so
+`tests/integration/test_migrations.py` asserts that the migration chain produces
+exactly the model schema, preserves existing rows across an upgrade, and rolls
+back cleanly.
 
 Incidents deduplicate: the same correlation for the same entity inside the dedup
 window extends the existing incident instead of opening a second one, and a

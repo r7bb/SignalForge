@@ -16,6 +16,11 @@ class IncidentStatus(str, Enum):
     NEW = "new"
     TRIAGED = "triaged"
     INVESTIGATING = "investigating"
+    #: Parked pending something outside the SOC's control - a reply from the
+    #: account owner, a vendor ticket, a maintenance window. Without this state
+    #: analysts park cases by leaving them in ``investigating``, and the queue
+    #: stops describing what is actually being worked on.
+    WAITING = "waiting"
     CONTAINED = "contained"
     RESOLVED = "resolved"
     CLOSED_FALSE_POSITIVE = "closed_false_positive"
@@ -27,20 +32,62 @@ ALLOWED_TRANSITIONS: Dict[IncidentStatus, Set[IncidentStatus]] = {
     IncidentStatus.NEW: {IncidentStatus.TRIAGED, IncidentStatus.CLOSED_FALSE_POSITIVE},
     IncidentStatus.TRIAGED: {
         IncidentStatus.INVESTIGATING,
+        IncidentStatus.WAITING,
         IncidentStatus.CLOSED_FALSE_POSITIVE,
         IncidentStatus.RESOLVED,
     },
     IncidentStatus.INVESTIGATING: {
         IncidentStatus.CONTAINED,
+        IncidentStatus.WAITING,
         IncidentStatus.RESOLVED,
         IncidentStatus.CLOSED_FALSE_POSITIVE,
     },
-    IncidentStatus.CONTAINED: {IncidentStatus.RESOLVED, IncidentStatus.INVESTIGATING},
+    IncidentStatus.WAITING: {
+        IncidentStatus.INVESTIGATING,
+        IncidentStatus.CONTAINED,
+        IncidentStatus.RESOLVED,
+        IncidentStatus.CLOSED_FALSE_POSITIVE,
+    },
+    IncidentStatus.CONTAINED: {
+        IncidentStatus.RESOLVED,
+        IncidentStatus.INVESTIGATING,
+        IncidentStatus.WAITING,
+    },
     IncidentStatus.RESOLVED: {IncidentStatus.INVESTIGATING},
     IncidentStatus.CLOSED_FALSE_POSITIVE: {IncidentStatus.INVESTIGATING},
 }
 
 TERMINAL_STATUSES = {IncidentStatus.RESOLVED, IncidentStatus.CLOSED_FALSE_POSITIVE}
+
+#: Statuses that leave an incident on somebody's plate.
+ACTIVE_STATUSES = {
+    IncidentStatus.NEW,
+    IncidentStatus.TRIAGED,
+    IncidentStatus.INVESTIGATING,
+    IncidentStatus.WAITING,
+    IncidentStatus.CONTAINED,
+}
+
+#: Minimum *global* role for each transition. Legal-per-the-state-machine and
+#: permitted-for-this-person are different questions: containment touches real
+#: resources, so it needs a responder.
+#:
+#: ``closed_false_positive`` is the one that matters most. Closing a real
+#: intrusion as noise is the expensive mistake, so it additionally accepts a
+#: lead of the owning team (see ``IncidentManager.transition``) - the same
+#: second-pair-of-eyes principle the response playbooks already enforce.
+TRANSITION_MIN_ROLE: Dict[IncidentStatus, str] = {
+    IncidentStatus.NEW: "analyst",
+    IncidentStatus.TRIAGED: "analyst",
+    IncidentStatus.INVESTIGATING: "analyst",
+    IncidentStatus.WAITING: "analyst",
+    IncidentStatus.CONTAINED: "responder",
+    IncidentStatus.RESOLVED: "analyst",
+    IncidentStatus.CLOSED_FALSE_POSITIVE: "admin",
+}
+
+#: Transitions a team lead may make regardless of their global role.
+TEAM_LEAD_TRANSITIONS = {IncidentStatus.CLOSED_FALSE_POSITIVE}
 
 
 class IncidentSeverity(str, Enum):
@@ -101,7 +148,25 @@ class Incident(BaseModel):
     summary: Optional[str] = None
     status: IncidentStatus = IncidentStatus.NEW
     severity: IncidentSeverity = IncidentSeverity.MEDIUM
+
+    # --- Ownership --------------------------------------------------------
+    #: Denormalised assignee email, kept for display and for the pre-teams API
+    #: shape. ``assignee_id`` is the authoritative link.
     owner: Optional[str] = None
+    assignee_id: Optional[str] = None
+    #: The queue an incident sits in. It belongs to a team before it belongs to
+    #: a person, so nothing becomes invisible just because nobody claimed it.
+    team_id: Optional[str] = None
+    team_slug: Optional[str] = None
+    #: When someone first took responsibility - the clock that MTTA measures.
+    acknowledged_at: Optional[datetime] = None
+    #: Optimistic-concurrency token: a write carrying a stale version is
+    #: rejected rather than silently overwriting another analyst's edit.
+    version: int = 1
+    #: Set while ``status`` is ``waiting``; the worker re-surfaces the incident
+    #: once this passes.
+    waiting_until: Optional[datetime] = None
+    waiting_reason: Optional[str] = None
 
     risk_score: int = 0
     risk_factors: List[str] = Field(default_factory=list)

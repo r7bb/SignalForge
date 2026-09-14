@@ -57,6 +57,24 @@ benchmark: ## Benchmark and write benchmarks/latest.json
 lint-rules: ## Lint the detection rules (the CI gate)
 	$(BIN)/python scripts/validate_rules.py detections
 
+.PHONY: migrate
+migrate: ## Apply database migrations (alembic upgrade head)
+	$(BIN)/alembic upgrade head
+
+.PHONY: migration
+migration: ## Generate a revision from model changes: make migration m="add x"
+	@test -n "$(m)" || (echo 'usage: make migration m="what changed"'; exit 1)
+	$(BIN)/alembic revision --autogenerate -m "$(m)"
+	@echo
+	@echo "Review the generated file before committing. Two things to check:"
+	@echo "  * a JSONB column renders as astext_type=sa.Text(), not Text()"
+	@echo "  * new NOT NULL columns need a server_default to back-fill rows"
+
+.PHONY: migration-status
+migration-status: ## Show the current revision and any un-migrated model changes
+	$(BIN)/alembic current
+	$(BIN)/alembic check
+
 .PHONY: lint
 lint: ## Ruff + mypy
 	$(BIN)/ruff check libs services apps/api tests scripts

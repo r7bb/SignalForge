@@ -28,6 +28,10 @@ def _environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     monkeypatch.setenv("SIGNALFORGE_BUS_BACKEND", "memory")
     monkeypatch.setenv("SIGNALFORGE_EVENT_STORE_BACKEND", "memory")
     monkeypatch.setenv("SIGNALFORGE_DATABASE_URL", "sqlite+pysqlite:///%s" % (tmp_path / "sf.db"))
+    # Throwaway database per test: build it straight from the models.
+    # tests/integration/test_migrations.py separately proves the Alembic
+    # chain produces exactly this schema.
+    monkeypatch.setenv("SIGNALFORGE_DB_AUTO_MIGRATE", "false")
     monkeypatch.setenv("SIGNALFORGE_JWT_SECRET", "test-secret")
     monkeypatch.setenv("SIGNALFORGE_RESPONSE_DRY_RUN", "true")
     monkeypatch.setenv("SIGNALFORGE_INTEL_HTTP_ENABLED", "false")

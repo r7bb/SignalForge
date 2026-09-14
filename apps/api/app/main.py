@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from signalforge.auth import AuthError
 from signalforge.config import get_settings
-from signalforge.incidents import IncidentError
+from signalforge.incidents import IncidentError, IncidentPermissionError, TeamError
 from signalforge.logging_setup import configure_logging
 from signalforge.response import ResponseError
 from signalforge.sbom import SbomParseError
@@ -38,6 +38,7 @@ from .routers import (
     response,
     sbom,
     stats,
+    teams,
 )
 from .state import build_state
 
@@ -121,6 +122,22 @@ def create_app() -> FastAPI:
         )
         return JSONResponse(status_code=code, content={"detail": message})
 
+    # Registered after the base class so the more specific handler wins: being
+    # refused a transition is a 403, not a 409.
+    @app.exception_handler(IncidentPermissionError)
+    async def _incident_permission_error(
+        request: Request, exc: IncidentPermissionError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": str(exc)})
+
+    @app.exception_handler(TeamError)
+    async def _team_error(request: Request, exc: TeamError) -> JSONResponse:
+        message = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND if message.startswith("no such") else status.HTTP_409_CONFLICT
+        )
+        return JSONResponse(status_code=code, content={"detail": message})
+
     @app.exception_handler(ResponseError)
     async def _response_error(request: Request, exc: ResponseError) -> JSONResponse:
         message = str(exc)
@@ -171,6 +188,7 @@ def create_app() -> FastAPI:
     app.include_router(response.router, prefix=API_PREFIX)
     app.include_router(sbom.router, prefix=API_PREFIX)
     app.include_router(stats.router, prefix=API_PREFIX)
+    app.include_router(teams.router, prefix=API_PREFIX)
     app.include_router(lab.router, prefix=API_PREFIX)
     return app
 

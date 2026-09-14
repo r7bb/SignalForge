@@ -11,14 +11,17 @@ from signalforge.correlate.risk import risk_level
 from signalforge.models.incident import ALLOWED_TRANSITIONS, Incident, IncidentStatus
 from signalforge.response import list_playbooks, suggest_target
 
-from ..deps import get_state, require_analyst, tenant_scope
+from ..deps import get_state, require_analyst, require_viewer, tenant_scope
 from ..routers.alerts import _summary as alert_summary
 from ..schemas import (
     AssignRequest,
+    ClaimRequest,
     IncidentDetail,
     IncidentSummary,
     NoteRequest,
+    TransferRequest,
     TransitionRequest,
+    UnclaimRequest,
 )
 from ..state import AppState
 
@@ -33,6 +36,13 @@ def _summary(incident: Incident) -> Dict[str, Any]:
         "status": incident.status.value,
         "severity": incident.severity.value,
         "owner": incident.owner,
+        "assignee_id": incident.assignee_id,
+        "team_id": incident.team_id,
+        "team_slug": incident.team_slug,
+        "acknowledged_at": incident.acknowledged_at,
+        "waiting_until": incident.waiting_until,
+        "waiting_reason": incident.waiting_reason,
+        "version": incident.version,
         "risk_score": incident.risk_score,
         "risk_level": risk_level(incident.risk_score),
         "scenario": incident.scenario,
@@ -69,11 +79,17 @@ async def list_incidents(
     scenario: Optional[str] = None,
     min_risk: Optional[int] = Query(default=None, ge=0, le=100),
     open_only: bool = False,
+    team: Optional[str] = Query(default=None, description="team slug or id"),
+    mine: bool = Query(default=False, description="only incidents assigned to me"),
+    unclaimed: bool = Query(default=False, description="only unclaimed incidents"),
+    order: str = Query(default="risk", pattern="^(risk|oldest)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_viewer),
     tenant: str = Depends(tenant_scope),
     state: AppState = Depends(get_state),
 ) -> List[Dict[str, Any]]:
+    team_id = state.teams.require(tenant, team).id if team else None
     incidents = state.incidents.list(
         tenant,
         status=status_filter,
@@ -82,6 +98,10 @@ async def list_incidents(
         scenario=scenario,
         min_risk=min_risk,
         open_only=open_only,
+        team_id=team_id,
+        assignee_id=principal.user_id if mine else None,
+        unassigned_only=unclaimed,
+        order=order,
         limit=limit,
         offset=offset,
     )
@@ -186,7 +206,76 @@ async def transition(
             % (payload.status, ", ".join(item.value for item in IncidentStatus)),
         ) from exc
     incident = state.incidents.transition(
-        principal.tenant, reference, target, principal.email, payload.reason
+        principal.tenant,
+        reference,
+        target,
+        principal.email,
+        payload.reason,
+        actor_role=principal.role,
+        actor_user_id=principal.user_id,
+        expected_version=payload.expected_version,
+        waiting_until=payload.waiting_until,
+    )
+    return _summary(incident)
+
+
+@router.post("/{reference}/claim", response_model=IncidentSummary)
+async def claim(
+    reference: str,
+    payload: ClaimRequest,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Take personal ownership. 409 if somebody else already holds it."""
+    _require(state, principal.tenant, reference)
+    incident = state.incidents.claim(
+        principal.tenant,
+        reference,
+        user_id=principal.user_id,
+        email=principal.email,
+        expected_version=payload.expected_version,
+        force=payload.force,
+    )
+    return _summary(incident)
+
+
+@router.post("/{reference}/unclaim", response_model=IncidentSummary)
+async def unclaim(
+    reference: str,
+    payload: UnclaimRequest,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    _require(state, principal.tenant, reference)
+    incident = state.incidents.unclaim(
+        principal.tenant,
+        reference,
+        actor=principal.email,
+        reason=payload.reason,
+        expected_version=payload.expected_version,
+    )
+    return _summary(incident)
+
+
+@router.post("/{reference}/transfer", response_model=IncidentSummary)
+async def transfer(
+    reference: str,
+    payload: TransferRequest,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Move an incident to another queue. The reason is mandatory."""
+    _require(state, principal.tenant, reference)
+    team = state.teams.require(principal.tenant, payload.team)
+    incident = state.incidents.transfer(
+        principal.tenant,
+        reference,
+        team_id=team.id,
+        team_slug=team.slug,
+        reason=payload.reason,
+        actor=principal.email,
+        expected_version=payload.expected_version,
+        keep_assignee=payload.keep_assignee,
     )
     return _summary(incident)
 

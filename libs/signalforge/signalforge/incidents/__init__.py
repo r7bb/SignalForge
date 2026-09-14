@@ -2,12 +2,19 @@
 
 from .manager import (
     SINGLE_ALERT_INCIDENT_THRESHOLD,
+    IncidentConflict,
     IncidentError,
     IncidentManager,
+    IncidentPermissionError,
 )
+from .teams import TeamError, TeamService
 
 __all__ = [
     "SINGLE_ALERT_INCIDENT_THRESHOLD",
+    "IncidentConflict",
     "IncidentError",
     "IncidentManager",
+    "IncidentPermissionError",
+    "TeamError",
+    "TeamService",
 ]

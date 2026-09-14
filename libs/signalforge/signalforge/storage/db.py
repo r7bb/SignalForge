@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 from sqlalchemy import (
@@ -20,6 +21,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    MetaData,
     String,
     Text,
     UniqueConstraint,
@@ -50,8 +52,25 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+#: Deterministic constraint names.
+#:
+#: Without this, SQLAlchemy leaves primary keys and foreign keys unnamed and
+#: lets the database invent something. That is survivable until the first
+#: migration that alters a table on SQLite: batch mode has to drop and rebuild
+#: the table, and it cannot rebuild a constraint it has no name for - it fails
+#: with "Constraint must have a name". Naming them up front also means a
+#: migration can drop a constraint by name on every backend.
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 class TimestampMixin:
@@ -179,11 +198,48 @@ class Alert(Base, TimestampMixin):
     incident: Mapped[Optional[Incident]] = relationship(back_populates="alerts")
 
 
+class Team(Base, TimestampMixin):
+    """A queue. Incidents are routed here before anybody claims them."""
+
+    __tablename__ = "teams"
+    __table_args__ = (UniqueConstraint("tenant", "slug", name="uq_teams_tenant_slug"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    tenant: Mapped[str] = mapped_column(String(64), index=True)
+    slug: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    #: The fallback queue for a tenant when no routing rule matches. At most one
+    #: per tenant; the team service enforces it.
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    members: Mapped[List[TeamMember]] = relationship(
+        back_populates="team", cascade="all, delete-orphan"
+    )
+
+
+class TeamMember(Base, TimestampMixin):
+    __tablename__ = "team_members"
+    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_members_team_user"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    team_id: Mapped[str] = mapped_column(ForeignKey("teams.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    #: lead | member. A lead may close their team's incidents as false
+    #: positives without holding the global admin role.
+    role: Mapped[str] = mapped_column(String(32), default="member")
+
+    team: Mapped[Team] = relationship(back_populates="members")
+    user: Mapped[User] = relationship()
+
+
 class Incident(Base, TimestampMixin):
     __tablename__ = "incidents"
     __table_args__ = (
         UniqueConstraint("tenant", "key", name="uq_incidents_tenant_key"),
         Index("ix_incidents_tenant_status", "tenant", "status"),
+        # The queue view: a team's open work, oldest first.
+        Index("ix_incidents_team_status", "team_id", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -194,6 +250,12 @@ class Incident(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default="new", index=True)
     severity: Mapped[str] = mapped_column(String(32), default="medium")
     owner: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    assignee_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), index=True)
+    team_id: Mapped[Optional[str]] = mapped_column(ForeignKey("teams.id"), index=True)
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    waiting_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    waiting_reason: Mapped[Optional[str]] = mapped_column(Text)
     risk_score: Mapped[int] = mapped_column(Integer, default=0, index=True)
     scenario: Mapped[Optional[str]] = mapped_column(String(128), index=True)
     dedup_key: Mapped[str] = mapped_column(String(64), index=True)
@@ -423,12 +485,98 @@ def get_session_factory(settings: Optional[Settings] = None) -> sessionmaker:
     return _SESSION_FACTORY
 
 
-def init_db(settings: Optional[Settings] = None, *, drop: bool = False) -> Engine:
+def find_migrations_path(settings: Optional[Settings] = None) -> Path:
+    """Locate the Alembic tree.
+
+    Explicit configuration wins; otherwise walk up from this module looking for
+    a ``migrations/env.py``, which finds it in a source checkout and in the
+    container images alike.
+    """
+    settings = settings or get_settings()
+    if settings.migrations_path:
+        candidate = Path(settings.migrations_path)
+        if not (candidate / "env.py").exists():
+            raise RuntimeError(
+                "SIGNALFORGE_MIGRATIONS_PATH=%s does not contain an env.py" % candidate
+            )
+        return candidate
+
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "migrations"
+        if (candidate / "env.py").exists():
+            return candidate
+    raise RuntimeError("could not locate the migrations directory; set SIGNALFORGE_MIGRATIONS_PATH")
+
+
+def upgrade_database(
+    settings: Optional[Settings] = None,
+    *,
+    engine: Optional[Engine] = None,
+    revision: str = "head",
+) -> None:
+    """Run ``alembic upgrade`` on the application's own connection.
+
+    Sharing the connection (rather than letting Alembic open its own) keeps the
+    migration on the same database the caller just resolved, which matters when
+    the URL comes from an environment variable that could differ between the
+    process and an ``alembic.ini``.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    engine = engine or get_engine(settings)
+    migrations = find_migrations_path(settings)
+
+    config = Config()
+    config.set_main_option("script_location", str(migrations))
+    # Consulted only if something bypasses the injected connection.
+    config.set_main_option("sqlalchemy.url", str(engine.url))
+
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, revision)
+
+
+def init_db(
+    settings: Optional[Settings] = None,
+    *,
+    drop: bool = False,
+    migrate: Optional[bool] = None,
+) -> Engine:
+    """Bring the metadata database up to date.
+
+    ``migrate`` (defaulting to the ``db_auto_migrate`` setting) picks between
+    the two ways to get there:
+
+    * **True** - ``alembic upgrade head``: the deployment path, and the only one
+      that can alter an existing table.
+    * **False** - ``create_all``: builds the current models directly. Fast, and
+      correct for a throwaway database, but it silently ignores drift on one
+      that already exists, so it is not a deployment path.
+    """
+    settings = settings or get_settings()
     engine = get_engine(settings, refresh=True)
     if drop:
         Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+        _drop_alembic_version(engine)
+
+    if migrate is None:
+        migrate = settings.db_auto_migrate
+
+    if migrate and engine.url.database not in (None, ":memory:"):
+        upgrade_database(settings, engine=engine)
+    else:
+        # An in-memory SQLite database cannot be migrated: every connection
+        # gets a fresh, empty database, so there is nothing for Alembic to
+        # upgrade. Build it from the models instead.
+        Base.metadata.create_all(engine)
     return engine
+
+
+def _drop_alembic_version(engine: Engine) -> None:
+    """Forget the recorded revision so a later upgrade replays from scratch."""
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
 
 
 def session_scope() -> Generator[Session, None, None]:

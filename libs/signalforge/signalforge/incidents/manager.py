@@ -29,6 +29,9 @@ from ..correlate.risk import risk_level, score_incident
 from ..models.alert import Alert, AlertStatus
 from ..models.incident import (
     ALLOWED_TRANSITIONS,
+    TEAM_LEAD_TRANSITIONS,
+    TERMINAL_STATUSES,
+    TRANSITION_MIN_ROLE,
     Incident,
     IncidentNote,
     IncidentSeverity,
@@ -55,6 +58,19 @@ SEVERITY_FOR_LEVEL = {
 
 class IncidentError(Exception):
     """Invalid case-management operation (bad transition, unknown incident)."""
+
+
+class IncidentConflict(IncidentError):
+    """The incident moved under the caller's feet, or is already claimed.
+
+    Separate from :class:`IncidentError` so the API can answer ``409`` and the
+    dashboard can say "Dana updated this - reload" rather than reporting a
+    generic failure.
+    """
+
+
+class IncidentPermissionError(IncidentError):
+    """The caller is not allowed to make this particular transition."""
 
 
 class IncidentManager:
@@ -555,6 +571,10 @@ class IncidentManager:
         scenario: Optional[str] = None,
         min_risk: Optional[int] = None,
         open_only: bool = False,
+        team_id: Optional[str] = None,
+        assignee_id: Optional[str] = None,
+        unassigned_only: bool = False,
+        order: str = "risk",
         limit: int = 50,
         offset: int = 0,
     ) -> List[Incident]:
@@ -579,7 +599,20 @@ class IncidentManager:
                 query = query.where(dbm.Incident.scenario == scenario)
             if min_risk is not None:
                 query = query.where(dbm.Incident.risk_score >= min_risk)
-            query = query.order_by(dbm.Incident.risk_score.desc(), dbm.Incident.last_seen.desc())
+            if team_id:
+                query = query.where(dbm.Incident.team_id == team_id)
+            if assignee_id:
+                query = query.where(dbm.Incident.assignee_id == assignee_id)
+            if unassigned_only:
+                query = query.where(dbm.Incident.assignee_id.is_(None))
+            if order == "oldest":
+                # Queue order. A queue is worked from the bottom: the oldest
+                # unclaimed item is the one most likely to breach.
+                query = query.order_by(dbm.Incident.first_seen.asc())
+            else:
+                query = query.order_by(
+                    dbm.Incident.risk_score.desc(), dbm.Incident.last_seen.desc()
+                )
             rows = session.scalars(query.limit(limit).offset(offset)).all()
             return [_row_to_incident(row) for row in rows]
 
@@ -618,7 +651,18 @@ class IncidentManager:
         target: IncidentStatus,
         actor: str,
         reason: Optional[str] = None,
+        *,
+        actor_role: Optional[str] = None,
+        actor_user_id: Optional[str] = None,
+        expected_version: Optional[int] = None,
+        waiting_until: Optional[datetime] = None,
     ) -> Incident:
+        """Move an incident through the state machine.
+
+        Three separate questions have to pass, in this order: is the move legal
+        for the current status, is *this caller* allowed to make it, and is the
+        caller working from the version of the incident they think they are.
+        """
         with self.session_factory() as session:
             row = self._require(session, tenant, reference)
             incident = _row_to_incident(row)
@@ -629,8 +673,42 @@ class IncidentManager:
                     "cannot move %s from %s to %s"
                     % (incident.key, incident.status.value, target.value)
                 )
+            self._check_version(incident, expected_version)
+            if actor_role is not None:
+                self._check_transition_permission(
+                    incident, target, actor_role=actor_role, actor_user_id=actor_user_id
+                )
+            if target is IncidentStatus.WAITING:
+                if waiting_until is None:
+                    raise IncidentError(
+                        "moving %s to waiting needs a wake-up time, otherwise it just "
+                        "disappears from the queue" % incident.key
+                    )
+                if not (reason or "").strip():
+                    raise IncidentError("moving %s to waiting needs a reason" % incident.key)
+            # Queue discipline: an incident that a team owns must be claimed by
+            # a person before it can be closed, so "who was accountable for
+            # this decision" always has an answer. Incidents that were never
+            # routed to a queue keep the simpler behaviour.
+            if (
+                target in TERMINAL_STATUSES
+                and incident.team_id is not None
+                and incident.assignee_id is None
+            ):
+                raise IncidentError(
+                    "%s belongs to a queue but nobody has claimed it; claim it before "
+                    "closing so the audit trail records who is accountable" % incident.key
+                )
+
             previous = incident.status
             incident.status = target
+            incident.version += 1
+            if target is IncidentStatus.WAITING:
+                incident.waiting_until = waiting_until
+                incident.waiting_reason = reason
+            else:
+                incident.waiting_until = None
+                incident.waiting_reason = None
             if target in {IncidentStatus.RESOLVED, IncidentStatus.CLOSED_FALSE_POSITIVE}:
                 incident.closed_at = datetime.now(tz=timezone.utc)
                 incident.close_reason = reason
@@ -691,6 +769,317 @@ class IncidentManager:
             )
             session.commit()
             return incident
+
+    # ------------------------------------------------------------------ #
+    # Queue ownership: route -> claim -> transfer
+    # ------------------------------------------------------------------ #
+    def route(
+        self,
+        tenant: str,
+        reference: str,
+        team_id: Optional[str],
+        *,
+        team_slug: Optional[str] = None,
+        actor: str = "system",
+        detail: Optional[str] = None,
+    ) -> Incident:
+        """Put an incident in a queue. Used by routing at creation time."""
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            incident = _row_to_incident(row)
+            previous = incident.team_id
+            if previous == team_id:
+                return incident
+            incident.team_id = team_id
+            incident.team_slug = team_slug
+            incident.version += 1
+            incident.record(
+                "incident.routed",
+                actor=actor,
+                detail=detail or team_slug,
+                from_team=previous,
+                to_team=team_id,
+            )
+            incident.timeline.append(
+                TimelineEntry(
+                    time=datetime.now(tz=timezone.utc),
+                    kind="status",
+                    title="routed to %s" % (team_slug or team_id or "no queue"),
+                    detail=detail,
+                    actor=actor,
+                )
+            )
+            _incident_to_row(incident, row)
+            dbm.record_audit(
+                session,
+                tenant=tenant,
+                actor=actor,
+                action="incident.routed",
+                entity_type="incident",
+                entity_id=incident.incident_id,
+                detail=team_slug,
+                from_team=previous,
+                to_team=team_id,
+            )
+            session.commit()
+            return incident
+
+    def claim(
+        self,
+        tenant: str,
+        reference: str,
+        *,
+        user_id: str,
+        email: str,
+        expected_version: Optional[int] = None,
+        force: bool = False,
+    ) -> Incident:
+        """Take personal ownership of an incident.
+
+        Claiming an incident somebody else already holds is a conflict rather
+        than a silent takeover - two analysts working the same case without
+        knowing is precisely what this is meant to prevent. ``force`` is for
+        leads reassigning after a shift ends.
+        """
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            incident = _row_to_incident(row)
+            self._check_version(incident, expected_version)
+
+            if incident.assignee_id and incident.assignee_id != user_id and not force:
+                raise IncidentConflict(
+                    "%s is already claimed by %s" % (incident.key, incident.owner or "someone else")
+                )
+            if incident.assignee_id == user_id:
+                return incident
+
+            previous_owner = incident.owner
+            incident.assignee_id = user_id
+            incident.owner = email
+            incident.version += 1
+            first_claim = incident.acknowledged_at is None
+            if first_claim:
+                # MTTA is measured from the first time anyone took it, not from
+                # the most recent reassignment.
+                incident.acknowledged_at = datetime.now(tz=timezone.utc)
+            incident.record(
+                "incident.claimed",
+                actor=email,
+                detail="%s -> %s" % (previous_owner or "unassigned", email),
+                first_claim=first_claim,
+            )
+            incident.timeline.append(
+                TimelineEntry(
+                    time=datetime.now(tz=timezone.utc),
+                    kind="status",
+                    title="claimed by %s" % email,
+                    actor=email,
+                )
+            )
+            _incident_to_row(incident, row)
+            dbm.record_audit(
+                session,
+                tenant=tenant,
+                actor=email,
+                action="incident.claimed",
+                entity_type="incident",
+                entity_id=incident.incident_id,
+                detail=email,
+                previous_owner=previous_owner,
+                first_claim=first_claim,
+            )
+            session.commit()
+            return incident
+
+    def unclaim(
+        self,
+        tenant: str,
+        reference: str,
+        *,
+        actor: str,
+        expected_version: Optional[int] = None,
+        reason: Optional[str] = None,
+    ) -> Incident:
+        """Return an incident to its queue, keeping the acknowledgement clock."""
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            incident = _row_to_incident(row)
+            self._check_version(incident, expected_version)
+            if incident.assignee_id is None:
+                return incident
+
+            previous_owner = incident.owner
+            incident.assignee_id = None
+            incident.owner = None
+            incident.version += 1
+            incident.record(
+                "incident.unclaimed",
+                actor=actor,
+                detail=reason or previous_owner,
+            )
+            incident.timeline.append(
+                TimelineEntry(
+                    time=datetime.now(tz=timezone.utc),
+                    kind="status",
+                    title="returned to the queue",
+                    detail=reason,
+                    actor=actor,
+                )
+            )
+            _incident_to_row(incident, row)
+            dbm.record_audit(
+                session,
+                tenant=tenant,
+                actor=actor,
+                action="incident.unclaimed",
+                entity_type="incident",
+                entity_id=incident.incident_id,
+                detail=reason,
+                previous_owner=previous_owner,
+            )
+            session.commit()
+            return incident
+
+    def transfer(
+        self,
+        tenant: str,
+        reference: str,
+        *,
+        team_id: str,
+        team_slug: str,
+        reason: str,
+        actor: str,
+        expected_version: Optional[int] = None,
+        keep_assignee: bool = False,
+    ) -> Incident:
+        """Hand an incident to another queue.
+
+        The reason is mandatory, and that is the whole point: "moved to Cloud
+        Security because the credential was an IAM key, not an app token" is the
+        sentence the receiving team needs and the one nobody writes voluntarily.
+
+        The assignee is cleared by default - moving teams means the new team
+        picks it up, and leaving a stale assignee from the old team makes the
+        queue lie about who is working it.
+        """
+        if not (reason or "").strip():
+            raise IncidentError("a transfer needs a reason")
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            incident = _row_to_incident(row)
+            self._check_version(incident, expected_version)
+            if incident.team_id == team_id:
+                raise IncidentError("%s is already with %s" % (incident.key, team_slug))
+
+            previous_team = incident.team_slug or incident.team_id
+            previous_owner = incident.owner
+            incident.team_id = team_id
+            incident.team_slug = team_slug
+            incident.version += 1
+            if not keep_assignee:
+                incident.assignee_id = None
+                incident.owner = None
+            incident.record(
+                "incident.transferred",
+                actor=actor,
+                detail=reason,
+                from_team=previous_team,
+                to_team=team_slug,
+                previous_owner=previous_owner,
+            )
+            incident.timeline.append(
+                TimelineEntry(
+                    time=datetime.now(tz=timezone.utc),
+                    kind="status",
+                    title="transferred %s -> %s" % (previous_team or "unrouted", team_slug),
+                    detail=reason,
+                    actor=actor,
+                )
+            )
+            _incident_to_row(incident, row)
+            dbm.record_audit(
+                session,
+                tenant=tenant,
+                actor=actor,
+                action="incident.transferred",
+                entity_type="incident",
+                entity_id=incident.incident_id,
+                detail=reason,
+                from_team=previous_team,
+                to_team=team_slug,
+                previous_owner=previous_owner,
+            )
+            session.commit()
+            return incident
+
+    def due_for_wake_up(
+        self, tenant: Optional[str] = None, *, now: Optional[datetime] = None
+    ) -> List[Incident]:
+        """Waiting incidents whose timer has expired, for the worker to re-surface."""
+        now = now or datetime.now(tz=timezone.utc)
+        with self.session_factory() as session:
+            query = select(dbm.Incident).where(
+                dbm.Incident.status == IncidentStatus.WAITING.value,
+                dbm.Incident.waiting_until.is_not(None),
+                dbm.Incident.waiting_until <= now,
+            )
+            if tenant:
+                query = query.where(dbm.Incident.tenant == tenant)
+            return [_row_to_incident(row) for row in session.scalars(query).all()]
+
+    # -------------------------------------------------------------- guards
+    @staticmethod
+    def _check_version(incident: Incident, expected_version: Optional[int]) -> None:
+        if expected_version is None:
+            return
+        if expected_version != incident.version:
+            raise IncidentConflict(
+                "%s has moved on since you loaded it (you have v%d, it is now v%d)"
+                % (incident.key, expected_version, incident.version)
+            )
+
+    def _check_transition_permission(
+        self,
+        incident: Incident,
+        target: IncidentStatus,
+        *,
+        actor_role: str,
+        actor_user_id: Optional[str],
+    ) -> None:
+        from ..auth.security import role_allows
+
+        required = TRANSITION_MIN_ROLE.get(target, "analyst")
+        if role_allows(actor_role, required):
+            return
+        # A lead of the owning team carries the extra authority for their own
+        # queue without needing tenant-wide admin.
+        # Short-circuits left to right, so the lead lookup only hits the
+        # database for the transitions that can actually be unlocked that way.
+        if (
+            target in TEAM_LEAD_TRANSITIONS
+            and actor_user_id
+            and incident.team_id
+            and self.teams.is_lead(incident.tenant, incident.team_id, actor_user_id)
+        ):
+            return
+        raise IncidentPermissionError(
+            "moving %s to %s needs the %s role%s"
+            % (
+                incident.key,
+                target.value,
+                required,
+                " or lead of the owning team" if target in TEAM_LEAD_TRANSITIONS else "",
+            )
+        )
+
+    @property
+    def teams(self):
+        """Lazily-built team service (kept off __init__ to avoid a cycle)."""
+        if getattr(self, "_teams", None) is None:
+            from .teams import TeamService
+
+            self._teams = TeamService(self.session_factory)
+        return self._teams
 
     def add_note(self, tenant: str, reference: str, author: str, body: str) -> Incident:
         if not body.strip():
@@ -938,6 +1327,12 @@ def _incident_to_row(incident: Incident, row: dbm.Incident) -> dbm.Incident:
     row.status = incident.status.value
     row.severity = incident.severity.value
     row.owner = incident.owner
+    row.assignee_id = incident.assignee_id
+    row.team_id = incident.team_id
+    row.acknowledged_at = incident.acknowledged_at
+    row.version = incident.version
+    row.waiting_until = incident.waiting_until
+    row.waiting_reason = incident.waiting_reason
     row.risk_score = incident.risk_score
     row.scenario = incident.scenario
     row.dedup_key = incident.dedup_key
@@ -959,6 +1354,12 @@ def _row_to_incident(row: dbm.Incident) -> Incident:
         # Columns are authoritative for anything an analyst can change.
         payload["status"] = row.status
         payload["owner"] = row.owner
+        payload["assignee_id"] = row.assignee_id
+        payload["team_id"] = row.team_id
+        payload["acknowledged_at"] = _as_utc_optional(row.acknowledged_at)
+        payload["version"] = row.version
+        payload["waiting_until"] = _as_utc_optional(row.waiting_until)
+        payload["waiting_reason"] = row.waiting_reason
         payload["severity"] = row.severity
         payload["risk_score"] = row.risk_score
         payload["key"] = row.key
@@ -971,6 +1372,12 @@ def _row_to_incident(row: dbm.Incident) -> Incident:
         status=IncidentStatus(row.status),
         severity=IncidentSeverity(row.severity),
         owner=row.owner,
+        assignee_id=row.assignee_id,
+        team_id=row.team_id,
+        acknowledged_at=_as_utc_optional(row.acknowledged_at),
+        version=row.version,
+        waiting_until=_as_utc_optional(row.waiting_until),
+        waiting_reason=row.waiting_reason,
         risk_score=row.risk_score,
         scenario=row.scenario,
         dedup_key=row.dedup_key,
@@ -1035,3 +1442,9 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _as_utc_optional(value: Optional[datetime]) -> Optional[datetime]:
+    """SQLite hands back naive datetimes; comparing one to an aware ``now()``
+    raises, so every nullable timestamp is normalised on the way out."""
+    return None if value is None else _as_utc(value)

@@ -83,15 +83,19 @@ authentication event all the way through, then widen.
 
 ---
 
-## Phase 7 — multi-analyst operations (planned, designed)
+## Phase 7 — multi-analyst operations (in progress)
 
-Today SignalForge is a single-analyst tool: an incident has one free-text
-`owner`, and anyone with the `analyst` role can move it through the state
+SignalForge started as a single-analyst tool: an incident had one free-text
+`owner`, and anyone with the `analyst` role could move it through the state
 machine. A real SOC runs on **queues, shifts and handovers** — an incident is
 opened by a detection, routed to a team, claimed by a person, escalated to
 another team when it turns out to be something else, and closed by someone
-accountable. That is the next substantial piece of work, and it is additive:
-the state machine, the audit trail and the tenancy model already carry it.
+accountable.
+
+The queue mechanics and the permission model are now in place (see *Delivered
+so far*), built on what was already there: the state machine, the audit trail
+and the tenancy model. What remains is routing rules, SLA timers and the
+dashboard surface for all of it.
 
 ### What already supports this
 
@@ -103,6 +107,22 @@ the state machine, the audit trail and the tenancy model already carry it.
 | `AuditLog` | Every transition, assignment, note and response action, with actor |
 | Role hierarchy + four-eyes approval | The precedent for "who is allowed to do this" |
 | Per-tenant isolation | Teams nest inside a tenant with no extra isolation work |
+
+### Delivered so far
+
+| Piece | State |
+|---|---|
+| Alembic migrations | **done** - baseline + the Phase 7 delta, with tests asserting the chain matches the models, preserves rows on upgrade and rolls back cleanly |
+| Teams and membership | **done** - `TeamService`, per-tenant slugs, one default queue, `lead`/`member` roles, audited |
+| Queue ownership | **done** - route, claim, unclaim, transfer-with-a-reason; claiming someone else's incident is a `409` |
+| `WAITING` state | **done** - requires a wake-up time and a reason; `due_for_wake_up()` gives the worker its input |
+| Per-transition permissions | **done** - containment needs a responder; closing as a false positive needs admin **or** a lead of the owning team |
+| Optimistic concurrency | **done** - `version` column; a stale write is a `409` rather than a silent overwrite |
+| Queue and handover views | **done** - `/teams/{slug}/queue` (oldest first) and `/teams/{slug}/handover` |
+| Routing rules | **planned** - queues are populated by transfer today; `routing/*.yml` is the next piece |
+| SLA timers and SOC metrics | **planned** - `acknowledged_at` is recorded, so MTTA is already derivable |
+| Presence, comments, mentions | **planned** |
+| Dashboard queue UI | **planned** - the API is in place; the analyst UI still shows the risk-ranked list only |
 
 ### What needs building
 
@@ -253,14 +273,13 @@ the point at which **Alembic stops being optional** (see the gap list).
    grow without bound.
 10. **Kubernetes manifests / Helm chart.** Compose is the supported path today;
     a chart with an HPA on consumer lag is the natural next deployment target.
-11. **Schema migrations (Alembic).** `Base.metadata.create_all` adds new tables
-    but never alters existing ones, so today a changed column needs a rebuilt
-    metadata database. Phase 7 alters `incidents`, so migrations have to land
-    first or alongside it — this is the prerequisite, not a nice-to-have.
-12. **Multi-analyst operations** — the whole of Phase 7 above. It is last in
-    this list only because it is the largest, not because it matters least: for
-    anyone evaluating this as SOC tooling rather than as a detection engine, it
-    is the most conspicuous absence.
+11. ~~**Schema migrations (Alembic).**~~ **Done.** `alembic upgrade head` runs
+    on startup (`db_auto_migrate`), the test suite still builds throwaway
+    databases from the models for speed, and `tests/integration/test_migrations.py`
+    is what stops the two drifting apart.
+12. **Multi-analyst operations** — Phase 7 above. The queue mechanics, the
+    permission model and the migration groundwork are in; routing rules, SLA
+    timers and the dashboard queue UI are what remain.
 
 ## Future scope, by theme
 

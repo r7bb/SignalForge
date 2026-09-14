@@ -114,6 +114,14 @@ class IncidentSummary(BaseModel):
     status: str
     severity: str
     owner: Optional[str] = None
+    assignee_id: Optional[str] = None
+    team_id: Optional[str] = None
+    team_slug: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    waiting_until: Optional[datetime] = None
+    waiting_reason: Optional[str] = None
+    #: Send this back on a mutation to be told about a concurrent edit.
+    version: int = 1
     risk_score: int
     risk_level: str
     scenario: Optional[str] = None
@@ -159,10 +167,45 @@ class IncidentDetail(IncidentSummary):
 class TransitionRequest(BaseModel):
     status: str
     reason: Optional[str] = None
+    #: Required when moving to ``waiting``: when to put it back in the queue.
+    waiting_until: Optional[datetime] = None
+    #: The version the caller last read. Supplying it turns a concurrent edit
+    #: into a 409 instead of a silent overwrite.
+    expected_version: Optional[int] = None
 
 
 class AssignRequest(BaseModel):
     owner: Optional[str] = None
+
+
+class ClaimRequest(BaseModel):
+    expected_version: Optional[int] = None
+    #: Leads reassigning after a shift ends; ignored for unclaimed incidents.
+    force: bool = False
+
+
+class UnclaimRequest(BaseModel):
+    reason: Optional[str] = None
+    expected_version: Optional[int] = None
+
+
+class TransferRequest(BaseModel):
+    team: str = Field(min_length=1, description="target team slug or id")
+    reason: str = Field(min_length=3, max_length=2000)
+    expected_version: Optional[int] = None
+    keep_assignee: bool = False
+
+
+class TeamRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    is_default: bool = False
+
+
+class TeamMemberRequest(BaseModel):
+    user: str = Field(min_length=1, description="user email or id")
+    role: str = Field(default="member", pattern="^(member|lead)$")
 
 
 class NoteRequest(BaseModel):

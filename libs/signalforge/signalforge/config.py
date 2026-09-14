@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     # --- Relational metadata store ---------------------------------------
     database_url: str = "sqlite+pysqlite:///./signalforge.db"
     database_echo: bool = False
+    #: Run ``alembic upgrade head`` when a service opens the database.
+    #: Convenient for the compose stack and local runs; turn it off where a
+    #: deployment applies migrations as a separate, ordered step (and in the
+    #: test suite, which builds each throwaway database straight from the
+    #: models -- see ``tests/integration/test_migrations.py`` for the check
+    #: that the two stay in agreement).
+    db_auto_migrate: bool = True
+    #: Where the Alembic tree lives. ``None`` resolves it relative to the
+    #: repository root, which is right for both a source checkout and the
+    #: container images (they copy ``migrations/`` alongside the library).
+    migrations_path: Optional[str] = None
 
     # --- Cache / broker ---------------------------------------------------
     redis_url: Optional[str] = None  # None -> in-process cache
