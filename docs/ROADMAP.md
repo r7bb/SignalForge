@@ -97,17 +97,6 @@ so far*), built on what was already there: the state machine, the audit trail
 and the tenancy model. What remains is routing rules, SLA timers and the
 dashboard surface for all of it.
 
-### What already supports this
-
-| Existing piece | What it gives us |
-|---|---|
-| `IncidentStatus` + `ALLOWED_TRANSITIONS` | A validated lifecycle; illegal moves are already a `409` |
-| `Incident.owner` + `assign()` | Single-assignee ownership with an audit entry |
-| `IncidentNote`, `TimelineEntry` | Per-author commentary, already rendered chronologically |
-| `AuditLog` | Every transition, assignment, note and response action, with actor |
-| Role hierarchy + four-eyes approval | The precedent for "who is allowed to do this" |
-| Per-tenant isolation | Teams nest inside a tenant with no extra isolation work |
-
 ### Delivered so far
 
 | Piece | State |
@@ -119,118 +108,92 @@ dashboard surface for all of it.
 | Per-transition permissions | **done** - containment needs a responder; closing as a false positive needs admin **or** a lead of the owning team |
 | Optimistic concurrency | **done** - `version` column; a stale write is a `409` rather than a silent overwrite |
 | Queue and handover views | **done** - `/teams/{slug}/queue` (oldest first) and `/teams/{slug}/handover` |
+| Verified on PostgreSQL | **done** - the CI integration job applies the migration and runs the suite against real PostgreSQL, not just SQLite batch mode |
 | Routing rules | **planned** - queues are populated by transfer today; `routing/*.yml` is the next piece |
 | SLA timers and SOC metrics | **planned** - `acknowledged_at` is recorded, so MTTA is already derivable |
 | Presence, comments, mentions | **planned** |
 | Dashboard queue UI | **planned** - the API is in place; the analyst UI still shows the risk-ranked list only |
 
-### What needs building
+### What is left
 
-**1. Teams and queues.** New tables: `teams` (tenant, name, slug, description),
-`team_members` (team, user, `lead`/`member`), and `incidents.team_id`. An
-incident belongs to a *queue* (a team) before it belongs to a person, so
-nothing is ever invisible just because no individual has picked it up.
-
-**2. Routing rules.** `routing_rules` (tenant, priority, match, team): match on
+**1. Routing rules.** Queues are populated by an explicit transfer today, which
+means a new incident sits unrouted until somebody moves it — the most obvious
+remaining gap. `routing_rules` (tenant, priority, match, team): match on
 scenario, correlation id, severity, ATT&CK tactic, asset criticality or source,
-first match wins, with a documented default queue as the fallback. This is
-detection-as-code's sibling — routing belongs in git for the same reasons, so
-the rules should live in `routing/` as YAML and be linted like detections are.
+first match wins, with the default queue as the fallback. Routing belongs in git
+for the same reasons detections do, so these should live in `routing/` as YAML
+and be linted by the same CI gate.
 
-**3. Claim / transfer semantics.**
-
-```
-             route                claim                 transfer
- detection ────────▶ team queue ────────▶ analyst ──────────────▶ other team
-                          ▲                  │                        │
-                          └──── unclaim ─────┘                        ▼
-                                                              (reason required)
-```
-
-- `claim` sets `assignee_id` and stamps `acknowledged_at`.
-- `unclaim` returns it to the queue (audited, so churn is visible).
-- `transfer` requires a target team **and a reason** — "moved to Cloud Security
-  because the credential was an IAM key, not an app token" is the sentence the
-  next shift needs.
-- Closing requires an assignee, so nothing is resolved by nobody.
-
-**4. A `waiting` state.** The current machine has no way to say "parked pending
-a reply from the account owner". Add `WAITING` with a required wake-up time and
-a reason; the worker re-surfaces it when the timer expires. Without this,
-analysts park cases by leaving them in `INVESTIGATING`, and the queue lies.
-
-**5. Per-transition permissions.** Right now any `analyst` can make any legal
-transition. Bind transitions to roles: `analyst` may triage and investigate,
-`responder` may contain, and `closed_false_positive` requires a team lead or
-admin — closing a real attack as noise should need a second pair of eyes, the
-same principle the response playbooks already enforce.
-
-**6. SLAs, and the metrics that come with them.** Per-severity targets for
+**2. SLAs and the metrics that come with them.** Per-severity targets for
 time-to-acknowledge and time-to-resolve, stored as `sla_ack_due` /
-`sla_resolve_due` when the incident opens. A worker task flags breaches,
-escalates (bump severity, notify the team lead) and records it. That gives the
-numbers a SOC is actually judged on:
+`sla_resolve_due` when the incident opens, with a worker flagging breaches and
+escalating. `acknowledged_at` is already recorded on first claim, so MTTA is
+derivable now; the rest is the reporting layer:
 
-| Metric | Definition |
-|---|---|
-| MTTD | detection time − first event time (already derivable from the timeline) |
-| MTTA | `acknowledged_at` − `created_at`, per team and per analyst |
-| MTTR | `closed_at` − `created_at`, split by disposition |
-| Queue age | oldest unclaimed incident per queue — the number that predicts a bad week |
-| Reopen rate | incidents leaving a terminal state, per closer |
+| Metric | Definition | Status |
+|---|---|---|
+| MTTD | detection time − first event time | derivable from the timeline |
+| MTTA | `acknowledged_at` − `created_at` | **data present**, no reporting yet |
+| MTTR | `closed_at` − `created_at`, by disposition | **data present**, no reporting yet |
+| Queue age | oldest unclaimed incident per queue | `/teams/{slug}/queue` is oldest-first, not aggregated |
+| Reopen rate | incidents leaving a terminal state, per closer | in the audit trail, not aggregated |
 
-**7. Concurrent editing.** Two analysts on one incident currently last-write-wins
-silently. Add an optimistic `version` column: a stale write is a `409` with the
-current state, and the UI shows "Dana updated this incident — reload". A
-short-lived presence key (Redis, ~30s TTL) drives a "Dana is viewing this"
-indicator, which prevents most collisions before they happen.
+**3. The dashboard queue UI.** The whole of Phase 7 is API-only. There is no
+queue switcher (**My work · My team · Unassigned · All**), no claim button, no
+assignee or SLA chips, no handover page. For anyone looking at the dashboard
+rather than the OpenAPI spec, the feature does not visibly exist — which makes
+this the highest-value remaining item even though it is not the deepest.
 
-**8. Collaboration surface.** Threaded comments with `@mention` (notify the
-mentioned user, add them as a watcher), explicit watchers independent of
-assignment, and case **linking and merging** — two incidents that turn out to be
-one intrusion should become one case with both evidence sets, which the
-supersession mechanism already models for the automated case.
+**4. Presence and collision warnings.** Optimistic concurrency already stops a
+stale write, but it tells the analyst *after* they have typed. A short-lived
+presence key (Redis, ~30s TTL) driving "Dana is viewing this" prevents the
+collision rather than reporting it.
 
-**9. Handover.** A shift-handover view and export: per queue, every open
-incident with status, assignee, age against SLA, last action and the most recent
-note. This is the artefact a shift actually hands over, and it is a read-only
-projection of data the platform already stores.
+**5. Collaboration surface.** Threaded comments with `@mention` (notify, and add
+the mentioned user as a watcher), explicit watchers independent of assignment,
+and case **linking and merging** — two incidents that turn out to be one
+intrusion should become one case with both evidence sets, which the supersession
+mechanism already models for the automated path.
 
-**10. Notifications.** A pluggable channel interface (webhook, Slack,
-PagerDuty, email) driven off the audit stream, firing on assignment, mention,
-SLA breach and escalation. The audit log is already the event source, so this
-is a consumer, not a new pipeline.
+**6. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
+email) driven off the audit stream, firing on assignment, mention, SLA breach
+and escalation. The audit log is already the event source, so this is a
+consumer, not a new pipeline.
 
-### API surface this implies
+### API surface
+
+Shipped:
 
 ```
 GET    /teams                          POST /teams
-GET    /teams/{slug}/members           POST /teams/{slug}/members
-GET    /queues/{slug}                  # the team's work, oldest-unclaimed first
+GET    /teams/mine                     DELETE /teams/{slug}
+POST   /teams/{slug}/members           DELETE /teams/{slug}/members/{user}
+POST   /teams/{slug}/default
+GET    /teams/{slug}/queue             # oldest-unclaimed-first
+GET    /teams/{slug}/handover          # the shift handover projection
 POST   /incidents/{ref}/claim          POST /incidents/{ref}/unclaim
 POST   /incidents/{ref}/transfer       { team, reason }
+GET    /incidents?mine=true&team=&unclaimed=&order=oldest
+```
+
+Still to come:
+
+```
 POST   /incidents/{ref}/watch          DELETE /incidents/{ref}/watch
 GET    /incidents/{ref}/comments       POST /incidents/{ref}/comments
 POST   /incidents/{ref}/link           { incident, relationship }
 GET    /stats/soc                      # MTTA/MTTR/queue age by team and analyst
-GET    /handover/{slug}                # shift handover projection
 ```
-
-### Dashboard changes
-
-A queue switcher (**My work · My team · Unassigned · All**), a claim button on
-every unassigned row, assignee and team chips, an SLA countdown that turns
-amber then red, the presence indicator, and a handover page. The incident view
-gains a comment thread with mentions beside the existing timeline.
 
 ### Sizing, honestly
 
-Teams + routing + claim/transfer + per-transition permissions is the core and
-is roughly a week of focused work, most of it schema, service methods and
-tests. SLAs and the SOC metrics are a second chunk of similar size. Presence,
-notifications and the handover view are smaller and can follow independently.
-The migration question bites here: this adds and alters tables, so it is also
-the point at which **Alembic stops being optional** (see the gap list).
+The queue mechanics took roughly a day, most of it schema, service methods and
+tests — helped by the audit trail and state machine already being there. The
+dashboard queue UI is a similar size and is what makes any of it visible.
+Routing rules are smaller than they look because the rule-loading and linting
+machinery already exists and can be pointed at a second directory. SLAs are
+mostly reporting. Presence, comments and notifications are independent and can
+land in any order.
 
 ---
 

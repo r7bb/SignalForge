@@ -39,6 +39,16 @@ script: the interesting engineering is the pipeline underneath the dashboard.
 
 ---
 
+![Security overview](docs/screenshots/02-overview.png)
+
+*The analyst overview: alert counts by band, the highest-risk open incident with
+its score, detection coverage by ATT&CK tactic, normalized event volume by OCSF
+class, and the noisiest rules. Every figure below is a real screenshot of this
+codebase running against the bundled lab telemetry — see
+[Reproducing these screenshots](#reproducing-these-screenshots).*
+
+---
+
 ## Contents
 
 - [What it actually does](#what-it-actually-does)
@@ -54,6 +64,7 @@ script: the interesting engineering is the pipeline underneath the dashboard.
 - [Repository layout](#repository-layout)
 - [Configuration](#configuration)
 - [Security posture and scope](#security-posture-and-scope)
+- [The dashboard](#the-dashboard)
 - [Roadmap](#roadmap)
 
 ---
@@ -195,6 +206,17 @@ processing pipeline maps community Sigma field names onto them
 `CommandLine` → `actor.process.cmd_line`, …), plus `logsource.category` →
 OCSF `class_uid` so a rule only ever sees events it is scoped to.
 
+![Detection catalogue](docs/screenshots/06-detections.png)
+
+*Every rule in the repository, with its level, ATT&CK tactics, test coverage and
+how often it has fired. Rules that ship without tests are visible immediately.*
+
+![Detection detail](docs/screenshots/07-detection-detail.png)
+
+*Opening a rule shows the Sigma source as committed, its content-hash revision,
+its declared tests and the alerts it has produced — detection-as-code with the
+code actually on screen.*
+
 **The linter (`scripts/validate_rules.py`)** fails a pull request for: an
 unparseable rule, a condition referencing a search that does not exist, a
 duplicate id or name, an aggregation without a `timeframe`, an unresolvable
@@ -222,6 +244,13 @@ Those four stages arrive from **three different sources** (`sshd`, the
 application audit log, CloudTrail) and still group together, because
 normalization resolves `alex`, `alex@example.com` and `AIDAEXAMPLEALEX` to one
 principal.
+
+![Risk score and ATT&CK path](docs/screenshots/f1-risk-and-attack.png)
+
+*The two halves of a correlated incident: the score with every contributing
+factor named, and the observed ATT&CK path ordered by kill chain. The score is
+never a bare number — "+18 correlated stages (4 distinct detections)" is the
+part an analyst can argue with.*
 
 ### The risk model
 
@@ -351,6 +380,11 @@ NEW → TRIAGED → INVESTIGATING → CONTAINED → RESOLVED
 Transitions are validated (an illegal one is a `409`, not a silent write) and
 every transition, assignment, note and response action writes an audit row.
 
+![Incident queue](docs/screenshots/03-incidents.png)
+
+*The incident queue, risk-ranked. Filters for status, severity and score, with
+the correlated scenario and ATT&CK tactics on every row.*
+
 `WAITING` is for work parked on something outside the SOC's control — a reply
 from the account owner, a vendor ticket. It requires both a reason and a
 wake-up time, because without it analysts park cases by leaving them in
@@ -433,6 +467,23 @@ the right slot:
 13:47:02  Response  Response requested: Contain lab account   awaiting approval
 ```
 
+![Investigation timeline](docs/screenshots/f3-timeline.png)
+
+*The reconstructed timeline. Alerts and raw events interleaved on one axis,
+ordered by **event** time so a log that arrived late still lands in the right
+slot, with the actor, source address and host on every row.*
+
+![Contributing alerts](docs/screenshots/f4-contributing-alerts.png)
+
+*The alerts the incident is built from. Correlation building blocks are labelled
+as such: they are informational on their own and only meaningful as part of the
+chain, which is why they never page anyone individually.*
+
+![Workflow](docs/screenshots/f5-workflow.png)
+
+*The state machine as the analyst sees it — only legal transitions are offered,
+and the API rejects anything else with a `409` rather than writing it.*
+
 **Response playbooks** are deliberately conservative:
 
 - nothing runs without an analyst — a playbook is *requested*, then approved by
@@ -446,6 +497,21 @@ the right slot:
 Shipped playbooks: disable lab account, revoke lab sessions, revoke lab API
 token, remove elevated role, add IP to the local denylist, isolate a disposable
 lab container, a composite "contain account", and notify-only.
+
+![Response playbooks](docs/screenshots/f6-response.png)
+
+*Requesting a playbook. The warning is not decoration: the adapter refuses
+targets outside this deployment's own lab resources.*
+
+**Everything lands in the audit trail**, which is the record of who did what:
+
+![Audit trail](docs/screenshots/f7-audit-trail.png)
+
+*One incident's full history: the correlator opened it, an admin routed it to
+the Identity queue **with a reason**, Dana claimed and triaged it, left a note,
+and a responder contained it. Two attempts are missing from this list because
+they were refused — Sam's attempt to claim an incident Dana already held
+(`409`), and Dana's attempt to contain it without the responder role (`403`).*
 
 ## Software supply chain (SBOM)
 
@@ -466,6 +532,13 @@ Version comparison handles semver, PEP 440's common shapes and pre-release
 ordering (`2.4.0-rc1 < 2.4.0`); a component already at or past the fixed version
 is reported unaffected rather than flagged.
 
+![Supply chain](docs/screenshots/08-supply-chain.png)
+
+*Ingested SBOMs, the advisories matched against them, and the blast radius of
+each one. `mobile-backend` appears as unaffected rather than absent, because it
+carries the package at a version past the fix — the distinction that decides
+whether anyone has to do anything.*
+
 ## Testing
 
 ```bash
@@ -475,6 +548,17 @@ pytest tests/integration     # pipeline, dedup, ordering, failure handling, tena
 pytest tests/e2e             # through the FastAPI app
 SIGNALFORGE_RUN_LOAD=1 pytest tests/load    # throughput and latency
 ```
+
+![Alerts](docs/screenshots/05-alerts.png)
+
+*The alert stream behind the incidents, filterable by risk band, rule and time
+window — where tuning starts when a rule turns noisy.*
+
+![Lab](docs/screenshots/09-lab.png)
+
+*The lab generator. Each scenario emits **benign telemetry** describing a
+suspicious sequence — logs only, never traffic against a target — which is what
+makes the detections testable without anything to attack.*
 
 **Every detection ships three kinds of test** — and the linter fails the build
 if one is missing:
@@ -619,6 +703,44 @@ shape of the deployment:
 - **Known gaps** (see the roadmap): the dashboard keeps its token in
   `sessionStorage` rather than an httpOnly cookie, detection window state is
   per-replica rather than shared, and there is no rate limiting on the API.
+
+## The dashboard
+
+Next.js (App Router) + TypeScript, no component framework — the styling is a
+single stylesheet driven by CSS custom properties, which is why light and dark
+are one token swap rather than two implementations.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/01-login.png" alt="Sign in"></td>
+<td width="50%"><img src="docs/screenshots/10-overview-dark.png" alt="Dark mode"></td>
+</tr>
+<tr>
+<td><em>Tenant-scoped sign-in. The token carries the tenant, and every query is
+scoped from it server-side.</em></td>
+<td><em>The same overview in dark mode.</em></td>
+</tr>
+</table>
+
+### Reproducing these screenshots
+
+Every image in this README is this codebase running against the bundled lab
+generator — no mockups, no hand-edited data:
+
+```bash
+docker compose up -d --build                 # or run the API and dashboard directly
+make seed                                    # baseline traffic + the attack scenarios
+open http://localhost:3000                   # admin@signalforge.local / signalforge
+```
+
+The incident shown is `Potential Account Compromise`, produced by the
+`account_compromise` scenario: four detections firing across three sources,
+correlated into one case by `sf-corr-0003`.
+
+**One gap worth naming:** the multi-analyst queue work (teams, claim, transfer,
+SLA-relevant timestamps) is **API-only so far**. The audit trail above is real —
+it was produced by driving those endpoints — but there is no queue UI yet, so
+there is no screenshot of one. It is the top item in the roadmap.
 
 ## Roadmap
 
