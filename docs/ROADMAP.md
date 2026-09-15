@@ -92,10 +92,10 @@ opened by a detection, routed to a team, claimed by a person, escalated to
 another team when it turns out to be something else, and closed by someone
 accountable.
 
-The queue mechanics and the permission model are now in place (see *Delivered
-so far*), built on what was already there: the state machine, the audit trail
-and the tenancy model. What remains is routing rules, SLA timers and the
-dashboard surface for all of it.
+The queue mechanics, the permission model and the analyst UI are now in place
+(see *Delivered so far*), built on what was already there: the state machine,
+the audit trail and the tenancy model. What remains is routing rules and the
+SOC metrics reporting.
 
 ### Delivered so far
 
@@ -112,7 +112,8 @@ dashboard surface for all of it.
 | Routing rules | **planned** - queues are populated by transfer today; `routing/*.yml` is the next piece |
 | SLA timers and SOC metrics | **planned** - `acknowledged_at` is recorded, so MTTA is already derivable |
 | Presence, comments, mentions | **planned** |
-| Dashboard queue UI | **planned** - the API is in place; the analyst UI still shows the risk-ranked list only |
+| Dashboard queue UI | **done** - `/queues` with team depth, scope switcher (My work / Unclaimed / All open), oldest-first ordering and per-row claim; claim/release, park-with-timer and transfer-with-reason on the incident page; the shift-handover report |
+| Concurrent-edit UX | **done** - a stale write surfaces the conflict and reloads the page rather than failing silently |
 
 ### What is left
 
@@ -138,24 +139,18 @@ derivable now; the rest is the reporting layer:
 | Queue age | oldest unclaimed incident per queue | `/teams/{slug}/queue` is oldest-first, not aggregated |
 | Reopen rate | incidents leaving a terminal state, per closer | in the audit trail, not aggregated |
 
-**3. The dashboard queue UI.** The whole of Phase 7 is API-only. There is no
-queue switcher (**My work · My team · Unassigned · All**), no claim button, no
-assignee or SLA chips, no handover page. For anyone looking at the dashboard
-rather than the OpenAPI spec, the feature does not visibly exist — which makes
-this the highest-value remaining item even though it is not the deepest.
+**3. Presence and collision warnings.** Optimistic concurrency stops a stale
+write and the UI now explains it, but only *after* the analyst has acted. A
+short-lived presence key (Redis, ~30s TTL) driving "Dana is viewing this"
+prevents the collision rather than reporting it.
 
-**4. Presence and collision warnings.** Optimistic concurrency already stops a
-stale write, but it tells the analyst *after* they have typed. A short-lived
-presence key (Redis, ~30s TTL) driving "Dana is viewing this" prevents the
-collision rather than reporting it.
-
-**5. Collaboration surface.** Threaded comments with `@mention` (notify, and add
+**4. Collaboration surface.** Threaded comments with `@mention` (notify, and add
 the mentioned user as a watcher), explicit watchers independent of assignment,
 and case **linking and merging** — two incidents that turn out to be one
 intrusion should become one case with both evidence sets, which the supersession
 mechanism already models for the automated path.
 
-**6. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
+**5. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
 email) driven off the audit stream, firing on assignment, mention, SLA breach
 and escalation. The audit log is already the event source, so this is a
 consumer, not a new pipeline.
@@ -183,13 +178,18 @@ POST   /incidents/{ref}/watch          DELETE /incidents/{ref}/watch
 GET    /incidents/{ref}/comments       POST /incidents/{ref}/comments
 POST   /incidents/{ref}/link           { incident, relationship }
 GET    /stats/soc                      # MTTA/MTTR/queue age by team and analyst
+GET    /incidents/{ref}/presence       # who else is looking at this
 ```
 
 ### Sizing, honestly
 
 The queue mechanics took roughly a day, most of it schema, service methods and
-tests — helped by the audit trail and state machine already being there. The
-dashboard queue UI is a similar size and is what makes any of it visible.
+tests — helped by the audit trail and state machine already being there. The UI
+took about half that, and was where the interesting bug turned up: the page set
+an error message and then reloaded, and the reload cleared it, so a `409` was
+invisible. Typecheck, lint and build all passed; only driving two browsers at
+one incident found it.
+
 Routing rules are smaller than they look because the rule-loading and linting
 machinery already exists and can be pointed at a second directory. SLAs are
 mostly reporting. Presence, comments and notifications are independent and can
@@ -246,38 +246,147 @@ land in any order.
 
 ## Future scope, by theme
 
-Beyond the ordered gaps, the directions worth pursuing:
+Beyond the ordered gaps. Each of these is something a real SOC asks for; the
+note after each says what already exists to build it on, because an idea with
+no foothold in the codebase is just a wish.
 
-**Detection engineering.** Import and curate upstream SigmaHQ rules (the field
-pipeline already exists; the missing part is a triage workflow for 3,000 rules).
-Shadow mode — run a new rule for a week recording volume and matched entities
-*without* alerting, so tuning happens before anyone is paged. Coverage gap
-reporting against the ATT&CK matrix, driven off the existing `/stats/mitre`.
-A false-positive feedback loop that turns "close as FP" into a proposed rule
-filter as a pull request.
+### Detection engineering
 
-**Data platform.** Replay tooling: re-run a day of raw records through a fixed
-mapper — the bus plus content-hash dedup already make this safe, it just needs
-a command. Event schema versioning for when the OCSF subset changes.
-OpenSearch ISM for tiering and retention.
+- **Import and curate upstream SigmaHQ rules.** The field-mapping pipeline
+  already exists; the missing part is a triage workflow for 3,000 rules — which
+  apply to the sources we actually have, and which need field mappings written.
+- **Shadow mode.** Run a new rule for a week recording volume and matched
+  entities *without* alerting, so tuning happens before anyone is paged. The
+  `is_building_block` flag is the precedent: a rule that matches but does not
+  page.
+- **Noise circuit breaker.** Give each rule an alert-rate budget and auto-mute
+  it when it blows past it, with a notification rather than silence. One
+  misconfigured rule should not bury a shift.
+- **Detection health monitoring.** A rule that has not fired in 30 days while
+  its logsource is flowing is probably broken, not lucky. Cross-referencing
+  rule hit counts against per-source event volume turns silent detection
+  failure into an alert — the failure mode nobody notices until an incident.
+- **Log-source health and coverage SLA.** Per-source expected volume with gap
+  detection: "`sshd` stopped reporting 40 minutes ago" is a security event.
+  Ingestion metrics per source already exist in Prometheus.
+- **ATT&CK Navigator layer export.** Emit the coverage view as a Navigator JSON
+  layer so it opens in the official tool; `/stats/mitre` already computes it.
+- **False-positive feedback loop.** Turn "close as false positive" into a
+  proposed rule filter as a pull request — detection tuning as code review.
+- **Alert narrative clustering.** Group hundreds of alerts into a handful of
+  behavioural narratives. Correlation already does this for known chains; this
+  is the unsupervised version for chains nobody wrote a rule for.
 
-**Intelligence.** Per-principal baselines (usual hours, countries, resources) to
-make "unusual for *this* account" a computed signal rather than a static rule.
-MISP/STIX ingestion alongside the static feed, with indicator confidence decay
-so stale intel stops inflating scores.
+### Data platform and scale
 
-**Response.** Real adapters (IdP, cloud) behind an explicit consent and
-blast-radius model. Playbook dry-run diffs — show exactly what *would* change
-before approval. Rollback for every containment action.
+- **Replay tooling.** Re-run a day of raw records through a fixed mapper. The
+  bus plus content-hash dedup already make this safe; it needs a command and a
+  progress report.
+- **Schema registry for the OCSF subset**, with compatibility checks in CI so a
+  mapper change that breaks a rule fails the build rather than production.
+- **Tiered and searchable cold storage** (OpenSearch ISM), plus an incident
+  archive, so a long-running deployment stops growing without bound.
+- **Backpressure with priority lanes.** Under load, shed verbose low-value
+  telemetry before authentication events. The bus has the DLQ and manual commit
+  semantics this needs.
+- **Multi-region and data residency.** Pin a tenant's events to a region and
+  route queries accordingly — the tenancy model already scopes every query.
+- **Ingest cost attribution.** Bytes and events per source and tenant against
+  the alerts each source actually produced. "This log source costs X and has
+  produced two detections in six months" is the report that decides SIEM
+  budgets, and almost nothing exposes it.
 
-**Security hardening.** httpOnly cookie auth and rate limiting (gaps 3 and 4),
-SSO/OIDC with SCIM provisioning, per-team RBAC, and a tamper-evident audit log
-(hash-chained entries) — an audit trail that can be edited by whoever owns the
-database is weak evidence.
+### Intelligence and analytics
 
-**Reporting.** Incident report export (PDF/Markdown) for a finished
-investigation, scheduled executive digests, and per-team performance reporting
-off the Phase 7 metrics.
+- **Per-principal baselines.** Usual hours, countries, resources and peer
+  group, so "unusual for *this* account" becomes computed rather than a static
+  rule. `first_seen_source` is declared as a context signal with no history
+  behind it — this is what would fill it in.
+- **Entity graph and attack-path analytics.** Build user → host → credential →
+  resource edges from normalized events and score lateral paths. It answers the
+  question the timeline cannot: *what else did this credential touch?*
+- **MISP/STIX ingestion** alongside the static feed, with indicator confidence
+  decay so stale intel stops inflating scores.
+- **Peer-group anomaly detection.** "This account did something no other member
+  of its team has ever done" is a stronger signal than a global threshold, and
+  the asset/identity inventories already carry the grouping.
+
+### AI-assisted analysis
+
+Worth doing carefully, and worth being explicit about the guardrails, because
+this is the area where security tooling most often overclaims:
+
+- **Drafted incident summaries.** A narrative of what happened from the
+  timeline and alerts, with every claim citing the event it came from. The model
+  drafts; the analyst owns it. **It never changes state** — no transitions, no
+  response actions, no closing.
+- **Natural language to query.** Translate "show me failed logins for
+  contractors outside business hours" into the OpenSearch DSL, and *show the
+  generated query before running it*. The Sigma → DSL compiler already proves
+  the target shape is machine-generable.
+- **Rule authoring assistant.** Propose a Sigma rule from a described behaviour,
+  then immediately run the three test kinds against it — the detection test
+  harness makes a generated rule falsifiable rather than plausible.
+- **An evaluation harness, first.** A fixed set of incidents with known-good
+  summaries, scored for faithfulness (does it invent IOCs?) and for whether the
+  suggested next step was the one an analyst took. Any of the above without this
+  is a demo, not a feature.
+
+### SOC operations
+
+- **On-call rotation and escalation policies.** Who is paged at 03:00, and what
+  happens when they do not acknowledge. Teams and membership are in place.
+- **Investigation runbooks as code.** Per-scenario checklists — "for a
+  suspected credential compromise, confirm these six things" — versioned and
+  linted like detections, rendered as a checklist on the incident.
+- **Continuous detection validation.** Run a scenario against production on a
+  schedule and assert the detection still fires. The lab generator plus the
+  detection test harness are most of this already; it is purple-teaming as a
+  cron job, and it catches the regression that ships when a mapper changes.
+- **Skills-based routing and workload balance.** Route on expertise rather than
+  round-robin, and stop assigning to the analyst with fourteen open cases.
+- **Post-incident review artefacts.** A blameless PIR document auto-populated
+  from the timeline, the audit trail and the response actions taken.
+
+### Compliance and governance
+
+- **Auditor evidence export.** "Show me every privileged access change last
+  quarter, with who approved it" — mapped to SOC 2 / ISO 27001 controls. The
+  audit trail has the data; it needs the control mapping and an export.
+- **Tamper-evident audit log.** Hash-chained entries, because an audit trail
+  editable by whoever owns the database is weak evidence.
+- **Chain-of-custody bundles.** A hash-sealed evidence export for one incident,
+  suitable for handing to someone outside the team.
+- **PII minimisation.** Field-level encryption and pseudonymised user
+  identifiers, with re-identification gated on a second approval — the same
+  four-eyes pattern the playbooks use.
+- **Retention and legal hold per tenant**, including defensible deletion.
+
+### Integrations
+
+- **Bidirectional ticketing sync** (Jira/ServiceNow): an incident and its
+  ticket should not drift apart.
+- **More sources as mappers**: EDR (CrowdStrike, Defender), Entra ID, Kubernetes
+  audit, network flow. Each is a mapper plus a field-mapping entry, which is
+  the point of normalizing to OCSF in the first place.
+- **Generic webhook ingestion** with a per-source mapping definition, so a new
+  source does not need a code change.
+- **Chat-native workflow** (Slack/Teams): triage from the channel where the
+  team already is, with the audit trail recording that it happened there.
+
+### Security hardening
+
+- **httpOnly cookie auth and rate limiting** (gaps 3 and 4).
+- **SSO/OIDC with SCIM provisioning**, so joiners and leavers are not manual.
+- **Per-team RBAC** beyond the global role hierarchy.
+- **Secret management** via a real KMS rather than environment variables.
+
+### Reporting
+
+- **Incident report export** (PDF/Markdown) for a finished investigation.
+- **Scheduled digests** — what changed this week, for people who do not open
+  the dashboard.
+- **Per-team performance reporting** off the Phase 7 metrics.
 
 ## Explicitly out of scope
 

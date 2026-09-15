@@ -9,6 +9,7 @@ import type { Session } from "@/lib/types";
 
 const NAV = [
   { href: "/", label: "Overview" },
+  { href: "/queues", label: "Queues" },
   { href: "/incidents", label: "Incidents" },
   { href: "/alerts", label: "Alerts" },
   { href: "/detections", label: "Detections" },

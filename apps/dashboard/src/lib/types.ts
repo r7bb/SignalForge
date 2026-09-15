@@ -41,6 +41,14 @@ export interface IncidentSummary {
   status: string;
   severity: RiskLevel;
   owner?: string | null;
+  assignee_id?: string | null;
+  team_id?: string | null;
+  team_slug?: string | null;
+  acknowledged_at?: string | null;
+  waiting_until?: string | null;
+  waiting_reason?: string | null;
+  /** Optimistic-concurrency token: send it back on a mutation. */
+  version: number;
   risk_score: number;
   risk_level: RiskLevel;
   scenario?: string | null;
@@ -247,4 +255,63 @@ export interface Session {
     tenant: string;
     full_name?: string | null;
   };
+}
+
+export interface TeamMember {
+  user_id: string;
+  email: string;
+  full_name?: string | null;
+  role: "member" | "lead";
+}
+
+export interface Team {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  is_default: boolean;
+  open_incidents: number;
+  unclaimed_incidents: number;
+  members: TeamMember[];
+  /** Only present on /teams/mine. */
+  is_lead?: boolean;
+}
+
+export interface QueueIncident {
+  key: string;
+  title: string;
+  status: string;
+  severity: RiskLevel;
+  risk_score: number;
+  owner?: string | null;
+  principal?: string | null;
+  first_seen: string;
+  acknowledged_at?: string | null;
+  waiting_until?: string | null;
+  version: number;
+}
+
+export interface QueueView {
+  team: { slug: string; name: string; id: string };
+  incidents: QueueIncident[];
+  count: number;
+}
+
+export interface HandoverRow {
+  key: string;
+  title: string;
+  status: string;
+  risk_score: number;
+  owner: string;
+  waiting_until?: string | null;
+  last_action?: string | null;
+  last_actor?: string | null;
+  last_action_at?: string | null;
+}
+
+export interface HandoverReport {
+  team: { slug: string; name: string };
+  open_incidents: number;
+  unclaimed: number;
+  incidents: HandoverRow[];
 }

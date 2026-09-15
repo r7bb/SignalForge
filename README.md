@@ -422,6 +422,30 @@ has picked up is still visibly somebody's:
   unclaimed item is the one most likely to breach. `GET /teams/{slug}/handover`
   is the shift-handover projection: every open case with its last action.
 
+![Queues](docs/screenshots/11-queues.png)
+
+*The queue view, and deliberately not the incident list. That page is
+risk-ranked, answering "what is worst?". A queue answers "what do I pick up
+next?", so it is oldest-first with queue depth per team, a scope switcher
+(**My work · Unclaimed · All open**) and a claim button on every unheld row.*
+
+![Queue controls](docs/screenshots/13-queue-controls.png)
+
+*The same operations on one incident: claim or release, park it with a reason
+and a wake-up time, or hand it to another queue — where the reason field is
+mandatory and the current queue is excluded from the picker.*
+
+![Shift handover](docs/screenshots/12-shift-handover.png)
+
+*The handover projection: every open case in the queue with its owner and its
+most recent action, which is the artefact one shift actually gives the next.*
+
+![Concurrent edit](docs/screenshots/14-concurrent-edit.png)
+
+*Two analysts, one incident. Sam's page was open while Dana claimed it, so
+Sam's write carries a stale version and is refused rather than silently
+overwriting her — the page reloads and says why.*
+
 ### Database migrations
 
 The metadata schema is versioned with Alembic. `alembic upgrade head` runs when
@@ -708,7 +732,9 @@ shape of the deployment:
 
 Next.js (App Router) + TypeScript, no component framework — the styling is a
 single stylesheet driven by CSS custom properties, which is why light and dark
-are one token swap rather than two implementations.
+are one token swap rather than two implementations. Ten routes: overview,
+queues, incidents, incident detail, alerts, detections, detection detail,
+supply chain, lab and sign-in.
 
 <table>
 <tr>
@@ -737,21 +763,28 @@ The incident shown is `Potential Account Compromise`, produced by the
 `account_compromise` scenario: four detections firing across three sources,
 correlated into one case by `sf-corr-0003`.
 
-**One gap worth naming:** the multi-analyst queue work (teams, claim, transfer,
-SLA-relevant timestamps) is **API-only so far**. The audit trail above is real —
-it was produced by driving those endpoints — but there is no queue UI yet, so
-there is no screenshot of one. It is the top item in the roadmap.
+**What is not pictured:** routing rules (queues are populated by an explicit
+transfer today) and the SOC metrics reporting. Both are named in the roadmap —
+`acknowledged_at` is recorded on first claim, so the MTTA data exists without a
+report to read it.
 
 ## Roadmap
 
 The build order, what is done, and what is next: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
-The largest planned piece is **multi-analyst operations**: today an incident has
-one free-text owner, where a real SOC needs team queues, routing rules,
-claim/transfer with a reason, a `waiting` state, SLA timers with MTTA/MTTR per
-team, concurrent-edit protection and a shift-handover view. The roadmap carries
-the full design — schema, API surface and sizing — because the existing state
-machine, audit trail and tenancy model already carry most of the weight.
+**Multi-analyst operations** (Phase 7) is largely delivered: team queues,
+claim/transfer with a mandatory reason, the `waiting` state, per-transition
+permissions, concurrent-edit protection, the shift-handover view and the analyst
+UI for all of it. What remains there is routing rules and the SOC metrics
+reporting (MTTA/MTTR per team — the timestamps are recorded, the report is not
+written).
+
+Beyond that the roadmap carries a **worked future scope** across nine themes —
+detection health monitoring, ingest cost attribution, entity-graph attack paths,
+continuous detection validation, auditor evidence export, and a deliberately
+guarded take on AI-assisted analysis (the model drafts and cites; it never
+changes state, and the evaluation harness comes first). Each item names what
+already exists to build it on.
 
 Further reading:
 

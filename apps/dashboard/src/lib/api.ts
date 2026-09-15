@@ -19,9 +19,12 @@ import type {
   ResponseAction,
   RuleSummary,
   Session,
+  HandoverReport,
+  QueueView,
   SupplyChainApp,
   SupplyChainFinding,
   TacticCoverage,
+  Team,
   TimelineItem,
   VulnerabilityImpact,
 } from "./types";
@@ -137,8 +140,50 @@ export const api = {
   allowedTransitions: (reference: string) =>
     request<{ status: string; allowed: string[] }>(`/incidents/${reference}/transitions`),
 
-  transition: (reference: string, status: string, reason?: string) =>
-    request<IncidentSummary>(`/incidents/${reference}/status`, json({ status, reason })),
+  transition: (
+    reference: string,
+    status: string,
+    reason?: string,
+    options: { waitingUntil?: string; expectedVersion?: number } = {},
+  ) =>
+    request<IncidentSummary>(
+      `/incidents/${reference}/status`,
+      json({
+        status,
+        reason,
+        waiting_until: options.waitingUntil,
+        expected_version: options.expectedVersion,
+      }),
+    ),
+
+  // -- queue ownership ----------------------------------------------------
+  claim: (reference: string, expectedVersion?: number, force = false) =>
+    request<IncidentSummary>(
+      `/incidents/${reference}/claim`,
+      json({ expected_version: expectedVersion, force }),
+    ),
+
+  unclaim: (reference: string, reason?: string, expectedVersion?: number) =>
+    request<IncidentSummary>(
+      `/incidents/${reference}/unclaim`,
+      json({ reason, expected_version: expectedVersion }),
+    ),
+
+  transfer: (reference: string, team: string, reason: string, expectedVersion?: number) =>
+    request<IncidentSummary>(
+      `/incidents/${reference}/transfer`,
+      json({ team, reason, expected_version: expectedVersion }),
+    ),
+
+  // -- teams and queues ---------------------------------------------------
+  teams: () => request<{ teams: Team[]; count: number }>("/teams"),
+
+  myTeams: () => request<{ teams: Team[]; count: number }>("/teams/mine"),
+
+  queue: (slug: string, unclaimedOnly = false) =>
+    request<QueueView>(`/teams/${slug}/queue${unclaimedOnly ? "?unclaimed_only=true" : ""}`),
+
+  handover: (slug: string) => request<HandoverReport>(`/teams/${slug}/handover`),
 
   assign: (reference: string, owner: string | null) =>
     request<IncidentSummary>(`/incidents/${reference}/assign`, json({ owner })),

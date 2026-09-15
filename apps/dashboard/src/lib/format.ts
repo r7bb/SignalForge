@@ -47,6 +47,16 @@ export function duration(fromIso: string, toIso: string): string {
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
+/** How long ago, in the same units as duration(). Queue age is measured
+ *  against now, which is the number that decides what to pick up next. */
+export function age(fromIso: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(fromIso).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+  return `${Math.round(seconds / 86400)}d`;
+}
+
 /** Risk band -> the reserved status colour (never a series colour). */
 export function riskColor(level: RiskLevel | string): string {
   switch (level) {

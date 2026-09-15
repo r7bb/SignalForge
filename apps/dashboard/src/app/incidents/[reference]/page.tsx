@@ -8,9 +8,9 @@ import { AttackPath } from "@/components/AttackPath";
 import { SeverityBadge, StatusBadge, Tag } from "@/components/Badge";
 import { RiskMeter } from "@/components/RiskMeter";
 import { Timeline } from "@/components/Timeline";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, loadSession } from "@/lib/api";
 import { dateTime, duration, statusLabel } from "@/lib/format";
-import type { IncidentDetail } from "@/lib/types";
+import type { IncidentDetail, Session, Team } from "@/lib/types";
 
 export default function IncidentPage() {
   const params = useParams<{ reference: string }>();
@@ -23,6 +23,12 @@ export default function IncidentPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [session, setSession] = useState<Session | null>(null);
+  const [waitReason, setWaitReason] = useState("");
+  const [waitHours, setWaitHours] = useState(4);
+  const [transferTeam, setTransferTeam] = useState("");
+  const [transferReason, setTransferReason] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -42,18 +48,43 @@ export default function IncidentPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    setSession(loadSession());
+    // Teams drive the transfer picker. A viewer with no queues configured
+    // simply does not see it, rather than seeing an empty control.
+    api
+      .teams()
+      .then((response) => setTeams(response.teams))
+      .catch(() => setTeams([]));
+  }, []);
+
   async function act(fn: () => Promise<unknown>, successMessage: string) {
     setBusy(true);
     setMessage(null);
+    setError(null);
     try {
       await fn();
       setMessage(successMessage);
       await load();
     } catch (exc) {
-      setError(exc instanceof ApiError ? exc.message : "Action failed.");
+      if (exc instanceof ApiError && exc.status === 409) {
+        // Somebody else moved the incident while this page was open. Reload
+        // first so the analyst is looking at what is actually there - and only
+        // then set the message, because load() clears `error` on success and
+        // would otherwise swallow the explanation.
+        await load();
+        setError(`${exc.message} \u2014 the page has been reloaded.`);
+      } else {
+        setError(exc instanceof ApiError ? exc.message : "Action failed.");
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Hours -> an ISO wake-up time for the waiting state. */
+  function wakeUpAt(hours: number): string {
+    return new Date(Date.now() + hours * 3600 * 1000).toISOString();
   }
 
   if (error && !incident) {
@@ -176,35 +207,163 @@ export default function IncidentPage() {
           </div>
           <div className="row" style={{ gap: 8 }}>
             {allowed.length === 0 && <span className="muted">No transitions available.</span>}
-            {allowed.map((target) => (
+            {allowed
+              .filter((target) => target !== "waiting")
+              .map((target) => (
+                <button
+                  key={target}
+                  type="button"
+                  className={target === "closed_false_positive" ? "button" : "button primary"}
+                  disabled={busy}
+                  onClick={() =>
+                    act(
+                      // The version we rendered goes with the write, so a
+                      // concurrent edit is a 409 instead of a lost update.
+                      () =>
+                        api.transition(reference, target, undefined, {
+                          expectedVersion: incident.version,
+                        }),
+                      `Moved to ${statusLabel(target)}.`,
+                    )
+                  }
+                >
+                  {statusLabel(target)}
+                </button>
+              ))}
+          </div>
+
+          {/* Parking an incident needs a reason and a wake-up time, otherwise
+              it just disappears from the queue. */}
+          {allowed.includes("waiting") && (
+            <div className="stack" style={{ gap: 8, marginTop: 14 }}>
+              <label htmlFor="waiting-reason" className="muted" style={{ fontSize: 12 }}>
+                Park this incident
+              </label>
+              <div className="row" style={{ gap: 8 }}>
+                <input
+                  id="waiting-reason"
+                  className="input"
+                  placeholder="Waiting on what? (required)"
+                  value={waitReason}
+                  onChange={(event) => setWaitReason(event.target.value)}
+                />
+                <select
+                  className="select"
+                  value={waitHours}
+                  onChange={(event) => setWaitHours(Number(event.target.value))}
+                  aria-label="Come back in"
+                >
+                  <option value={4}>in 4 hours</option>
+                  <option value={24}>tomorrow</option>
+                  <option value={72}>in 3 days</option>
+                </select>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy || waitReason.trim().length < 3}
+                  onClick={() =>
+                    act(
+                      () =>
+                        api.transition(reference, "waiting", waitReason, {
+                          waitingUntil: wakeUpAt(waitHours),
+                          expectedVersion: incident.version,
+                        }),
+                      "Parked - it will come back to the queue when the timer expires.",
+                    )
+                  }
+                >
+                  Wait
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="row" style={{ gap: 8, marginTop: 14 }}>
+            {incident.owner === session?.user?.email ? (
               <button
-                key={target}
                 type="button"
-                className={target === "closed_false_positive" ? "button" : "button primary"}
+                className="button"
                 disabled={busy}
                 onClick={() =>
                   act(
-                    () => api.transition(reference, target),
-                    `Moved to ${statusLabel(target)}.`,
+                    () => api.unclaim(reference, "returned to the queue", incident.version),
+                    "Returned to the queue.",
                   )
                 }
               >
-                {statusLabel(target)}
+                Release
               </button>
-            ))}
+            ) : (
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                onClick={() =>
+                  act(() => api.claim(reference, incident.version), "Claimed - it is yours.")
+                }
+              >
+                {incident.owner ? "Take over" : "Claim"}
+              </button>
+            )}
+            {incident.owner ? <Tag>Owner {incident.owner}</Tag> : <Tag>unclaimed</Tag>}
+            {incident.team_slug && <Tag title="Owning queue">queue {incident.team_slug}</Tag>}
+            {incident.waiting_until && (
+              <Tag title={incident.waiting_reason ?? undefined}>
+                waiting until {dateTime(incident.waiting_until)}
+              </Tag>
+            )}
           </div>
 
-          <div className="row" style={{ gap: 8, marginTop: 14 }}>
-            <button
-              type="button"
-              className="button"
-              disabled={busy}
-              onClick={() => act(() => api.assign(reference, "me"), "Assigned to you.")}
-            >
-              Assign to me
-            </button>
-            {incident.owner && <Tag>Owner {incident.owner}</Tag>}
-          </div>
+          {/* Transfer demands a reason - the receiving team needs to know why. */}
+          {teams.length > 0 && (
+            <div className="stack" style={{ gap: 8, marginTop: 14 }}>
+              <label htmlFor="transfer-team" className="muted" style={{ fontSize: 12 }}>
+                Hand to another queue
+              </label>
+              <div className="row" style={{ gap: 8 }}>
+                <select
+                  id="transfer-team"
+                  className="select"
+                  value={transferTeam}
+                  onChange={(event) => setTransferTeam(event.target.value)}
+                >
+                  <option value="">Select a queue...</option>
+                  {teams
+                    .filter((team) => team.slug !== incident.team_slug)
+                    .map((team) => (
+                      <option key={team.id} value={team.slug}>
+                        {team.name}
+                      </option>
+                    ))}
+                </select>
+                <input
+                  className="input"
+                  placeholder="Why does it belong there? (required)"
+                  value={transferReason}
+                  onChange={(event) => setTransferReason(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy || !transferTeam || transferReason.trim().length < 3}
+                  onClick={() =>
+                    act(
+                      () =>
+                        api.transfer(
+                          reference,
+                          transferTeam,
+                          transferReason,
+                          incident.version,
+                        ),
+                      `Transferred to ${transferTeam}.`,
+                    )
+                  }
+                >
+                  Transfer
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="form-field" style={{ marginTop: 16 }}>
             <label htmlFor="note">Add a note</label>
