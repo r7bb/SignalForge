@@ -76,8 +76,13 @@ migration-status: ## Show the current revision and any un-migrated model changes
 	$(BIN)/alembic check
 
 .PHONY: lint
-lint: ## Ruff + mypy
+lint: ## Ruff (as CI runs it) + mypy
 	$(BIN)/ruff check libs services apps/api tests scripts
+	# CI runs this too, and a missing --check here is how a formatting-only
+	# failure reaches the build after `ruff check` has already passed.
+	$(BIN)/ruff format --check libs services apps/api tests scripts
+	# Advisory: the CI step is continue-on-error and there is a standing
+	# backlog of ~90 findings in the older modules. See the roadmap.
 	$(BIN)/mypy libs/signalforge/signalforge apps/api/app || true
 
 .PHONY: format

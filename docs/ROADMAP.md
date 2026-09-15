@@ -240,7 +240,13 @@ and can land in any order.
     on startup (`db_auto_migrate`), the test suite still builds throwaway
     databases from the models for speed, and `tests/integration/test_migrations.py`
     is what stops the two drifting apart.
-12. **Multi-analyst operations** — Phase 7 above. The queue mechanics, the
+12. **Make mypy a real gate.** The CI type-check step is
+    `continue-on-error: true` and there is a standing backlog of ~90 findings,
+    mostly `Optional` handling in the older storage and telemetry modules plus
+    missing `types-PyYAML` stubs. An advisory type checker is a type checker
+    nobody reads: install the stubs, fix the genuine `None` paths, and drop the
+    `continue-on-error`.
+13. **Multi-analyst operations** — Phase 7 above. The queue mechanics, the
     permission model and the migration groundwork are in; routing rules, SLA
     timers and the dashboard queue UI are what remain.
 

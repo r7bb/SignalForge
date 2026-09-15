@@ -77,9 +77,7 @@ class RoutingRule:
         if not self.enabled:
             return False
         # Conditions are ANDed: every one in the block has to hold.
-        return all(
-            _condition_holds(key, expected, facts) for key, expected in self.match.items()
-        )
+        return all(_condition_holds(key, expected, facts) for key, expected in self.match.items())
 
     def describe(self) -> str:
         if self.is_catch_all:
