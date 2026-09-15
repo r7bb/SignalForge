@@ -405,6 +405,7 @@ class IncidentManager:
                     scenario=scenario,
                     reopened=reopen,
                 )
+                self.route_new_incident(session, incident, alerts)
                 new_row = dbm.Incident(id=incident.incident_id)
                 _incident_to_row(incident, new_row)
                 session.add(new_row)
@@ -1070,6 +1071,85 @@ class IncidentManager:
                 required,
                 " or lead of the owning team" if target in TEAM_LEAD_TRANSITIONS else "",
             )
+        )
+
+    @property
+    def routing(self):
+        """The routing table, loaded once per manager."""
+        if getattr(self, "_routing", None) is None:
+            from ..routing import load_routing_table
+
+            self._routing = load_routing_table(self.settings.routing_path)
+            for problem in self._routing.errors:
+                log.warning("routing rule rejected", extra={"detail": problem})
+        return self._routing
+
+    def route_new_incident(
+        self, session: Session, incident: Incident, alerts: Sequence[Alert] = ()
+    ) -> None:
+        """Place a freshly opened incident in a queue.
+
+        Called only on creation. Re-routing on every update would undo an
+        analyst's transfer the next time an alert joined the incident, which is
+        the opposite of what a transfer means.
+        """
+        if not self.settings.routing_enabled:
+            return
+
+        from ..routing import RoutingFacts
+
+        facts = RoutingFacts.from_incident(incident, alerts)
+        rule = self.routing.match(facts)
+
+        slug = rule.team if rule is not None else None
+        team_row = None
+        if slug:
+            team_row = session.scalars(
+                select(dbm.Team).where(dbm.Team.tenant == incident.tenant, dbm.Team.slug == slug)
+            ).first()
+            if team_row is None:
+                # The rule names a queue this tenant has not created. Fall back
+                # rather than dropping the incident somewhere invisible, and say
+                # so - a routing rule pointing at a missing team is a bug in the
+                # rule, not a reason to lose the incident.
+                log.warning(
+                    "routing rule names an unknown team",
+                    extra={"rule": rule.id, "team": slug, "tenant": incident.tenant},
+                )
+        if team_row is None:
+            team_row = session.scalars(
+                select(dbm.Team).where(
+                    dbm.Team.tenant == incident.tenant, dbm.Team.is_default.is_(True)
+                )
+            ).first()
+            rule = None if team_row is None else rule
+
+        if team_row is None:
+            return  # No queues configured at all: leave it unrouted.
+
+        incident.team_id = team_row.id
+        incident.team_slug = team_row.slug
+        rule_id = rule.id if rule else "default-queue"
+        matched = rule.describe() if rule else "no rule matched"
+        incident.record(
+            "incident.routed",
+            actor="router",
+            detail=team_row.slug,
+            rule=rule_id,
+            matched=matched,
+        )
+        # Also to the audit table, which is what the API reads: "why is this in
+        # my queue?" has to be answerable without opening the incident payload.
+        dbm.record_audit(
+            session,
+            tenant=incident.tenant,
+            actor="router",
+            action="incident.routed",
+            entity_type="incident",
+            entity_id=incident.incident_id,
+            detail=team_row.slug,
+            rule=rule_id,
+            matched=matched,
         )
 
     @property

@@ -4,8 +4,9 @@
 telemetry from Linux hosts, cloud audit trails, an identity provider and an
 application audit log; normalizes all of it into a single [OCSF]-shaped schema;
 evaluates [Sigma] detection rules over the stream; correlates the resulting alerts
-into incidents with a risk score and an ATT&CK mapping; and gives an analyst an
-investigation timeline with approval-gated response playbooks.
+into incidents with a risk score and an ATT&CK mapping; and gives a shift of
+analysts a queue to work, an investigation timeline, and approval-gated
+response playbooks.
 
 It is a working miniature SIEM/SOC platform rather than a single-purpose security
 script: the interesting engineering is the pipeline underneath the dashboard.
@@ -31,7 +32,7 @@ script: the interesting engineering is the pipeline underneath the dashboard.
                         Risk scoring · ATT&CK · enrichment
                                         │
                                         ▼
-                      Incident manager (state machine + audit)
+                  Incident manager (queues · state machine · audit)
                                         │
                                         ▼
                             Next.js analyst dashboard
@@ -81,7 +82,8 @@ codebase running against the bundled lab telemetry — see
 | **Risk scoring** | Documented experimental model: severity × confidence × asset criticality, adjusted by behavioural context |
 | **ATT&CK** | Tactics and techniques from rule tags, rendered as an ordered kill chain per incident |
 | **Enrichment** | Multi-provider threat intel (internal classification, checked-in static feed, optional HTTP feed) with caching, retry/backoff and a circuit breaker |
-| **Case management** | Incidents with a validated state machine, dedup, notes, ownership, evidence and a full audit trail |
+| **Case management** | Incidents with a validated state machine (including a `waiting` state with a wake-up timer), dedup, notes, evidence and a full audit trail |
+| **Queues and shifts** | Team queues an incident is *automatically routed to* by rules in git, before anyone claims it; claim/release, transfer with a mandatory reason, per-transition role permissions, optimistic concurrency on every write, and a shift-handover report |
 | **Response** | Approval-gated playbooks scoped to this deployment's own lab resources, dry-run by default, four-eyes approval |
 | **Supply chain** | CycloneDX/SPDX ingestion, version-range vulnerability matching, "which applications contain it" impact queries |
 | **Multi-tenancy** | Every query is tenant-scoped from the caller's token; cross-tenant reads are 403 |
@@ -445,6 +447,63 @@ most recent action, which is the artefact one shift actually gives the next.*
 *Two analysts, one incident. Sam's page was open while Dana claimed it, so
 Sam's write carries a stale version and is refused rather than silently
 overwriting her — the page reloads and says why.*
+
+### Routing rules
+
+An incident does not wait for a human to file it. Routing lives in git next to
+the detections, for the same reasons:
+
+```yaml
+# routing/identity.yml
+title: Identity owns identity and credential detections
+id: route-identity-0001
+priority: 10
+team: identity
+match:
+  rule_id: [sf-idn-*, sf-cred-*]
+```
+
+Rules are evaluated in `priority` order and **the first match wins**, so
+overlap is resolved by an explicit number rather than by file order. A rule with
+no `match` block matches everything, which is how the catch-all is written.
+Conditions inside one `match` block are ANDed; values inside one condition are
+ORed. Eleven fields are matchable (`rule_id`, `scenario`, `tactic`,
+`technique`, `severity`, `min_risk`/`max_risk`, `principal`, `hostname`,
+`source_ip`, `tenant`), and the globbable ones take patterns.
+
+**Match on `rule_id` before `scenario`.** `scenario` is only set on incidents a
+*correlation* rule opened; a severe single alert opens its own incident with no
+scenario at all. A table built only on scenarios sends most real traffic to the
+catch-all. Detection ids carry the domain (`sf-idn-*` identity, `sf-cloud-*`
+cloud, `sf-end-*` endpoint), which makes them the reliable signal — see
+[routing/README.md](routing/README.md).
+
+Routing is **audited like everything else**: the incident records which rule
+placed it, so "why is this in my queue?" is answerable. And it runs **only at
+creation**, so an analyst's transfer is not undone the next time an alert joins
+the incident.
+
+Two things stop a routing table rotting:
+
+```bash
+python scripts/validate_rules.py detections    # lints routing/ under the same gate
+```
+
+The linter rejects an unknown match field (a typo is a rule that silently never
+fires), a duplicate rule id, a missing catch-all, a second catch-all, and any
+rule sitting *behind* the catch-all where it can never match. And the preview
+endpoint answers both questions a routing change raises — where this goes now,
+and what else just changed:
+
+```bash
+curl -X POST localhost:8000/api/v1/routing/preview \
+  -d '{"rule_ids": ["sf-idn-0002"], "tactics": ["defense_evasion"]}'
+# -> team "identity" via route-identity-0001, plus every rule with its verdict
+```
+
+That example is a real one. MFA removal is tagged `defense_evasion`, so a
+tactic-only table hands it to whoever owns that tactic — cloud security. The
+detection id is unambiguous, and the preview is how that was diagnosed.
 
 ### Database migrations
 

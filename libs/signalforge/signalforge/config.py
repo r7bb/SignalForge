@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     detection_min_level: str = "low"
     alert_dedup_window_seconds: int = 300
 
+    # --- Incident routing -------------------------------------------------
+    #: Routing rules (``routing/*.yml``) deciding which queue a new incident
+    #: lands in. A missing directory, or no matching rule, means the incident
+    #: goes to the tenant's default queue.
+    routing_path: str = "routing"
+    #: Route incidents automatically as they are opened. Off leaves every new
+    #: incident unrouted for a human to place.
+    routing_enabled: bool = True
+
     # --- Correlation / risk ----------------------------------------------
     correlation_window_seconds: int = 900
     incident_dedup_window_seconds: int = 1800

@@ -1,0 +1,13 @@
+# Last resort. A rule with no match block matches everything, which is how a
+# catch-all is written; it sits at the highest priority number so every
+# specific rule is considered first.
+#
+# Without this, an unmatched incident falls back to the tenant's default queue
+# anyway - this exists so the routing decision is always explicit and audited
+# with a rule id rather than looking like nothing happened.
+title: Everything else goes to triage
+id: route-fallback-0001
+priority: 9000
+team: soc-triage
+description: >
+  If this queue is growing, that is the signal to write a more specific rule.

@@ -36,6 +36,7 @@ from .routers import (
     intel,
     lab,
     response,
+    routing,
     sbom,
     stats,
     teams,
@@ -189,6 +190,7 @@ def create_app() -> FastAPI:
     app.include_router(sbom.router, prefix=API_PREFIX)
     app.include_router(stats.router, prefix=API_PREFIX)
     app.include_router(teams.router, prefix=API_PREFIX)
+    app.include_router(routing.router, prefix=API_PREFIX)
     app.include_router(lab.router, prefix=API_PREFIX)
     return app
 

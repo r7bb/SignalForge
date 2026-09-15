@@ -1,0 +1,27 @@
+title: Cloud Security owns the cloud control plane
+id: route-cloud-0001
+priority: 20
+team: cloud-security
+description: >
+  Console logins, IAM changes and audit-trail tampering need someone with
+  access to the cloud account itself, not just the identity provider.
+match:
+  rule_id: [sf-cloud-*]
+---
+title: Cloud Security owns cloud persistence and audit tampering
+id: route-cloud-0002
+priority: 22
+team: cloud-security
+match:
+  scenario: [cloud_persistence, audit_tampering]
+---
+title: Cloud Security owns defence evasion
+id: route-cloud-0003
+priority: 45
+team: cloud-security
+description: >
+  A net, behind the identity rules: switching off logging or alerting is
+  usually cloud-side, but an MFA factor being removed is identity's, and
+  route-identity-0001 claims that first by detection id.
+match:
+  tactic: [defense_evasion]

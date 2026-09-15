@@ -1,0 +1,37 @@
+# Identity owns credentials, roles, MFA and sessions.
+#
+# rule_id first: MFA disabling is tagged defense_evasion, so a tactic-only
+# table hands it to whoever owns that tactic. The detection id is unambiguous
+# about which domain the finding came from.
+title: Identity owns identity and credential detections
+id: route-identity-0001
+priority: 10
+team: identity
+match:
+  rule_id: [sf-idn-*, sf-cred-*]
+---
+title: Identity owns authentication chains
+id: route-identity-0002
+priority: 12
+team: identity
+description: >
+  Brute force, impossible travel and the full account-compromise chain all end
+  in a credential or a role change, which only identity can action.
+match:
+  rule_id: [sf-auth-*, sf-corr-0001, sf-corr-0002, sf-corr-0003]
+---
+title: Identity owns account-compromise scenarios
+id: route-identity-0003
+priority: 14
+team: identity
+match:
+  scenario: [account_compromise, brute_force_success, impossible_travel, mfa_removal]
+---
+# Behind the id and scenario rules: a net for identity-shaped detections added
+# later that nobody has written a routing rule for yet.
+title: Identity owns credential access and privilege escalation
+id: route-identity-0004
+priority: 40
+team: identity
+match:
+  tactic: [credential_access, privilege_escalation]

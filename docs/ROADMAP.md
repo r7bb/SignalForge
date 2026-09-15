@@ -92,10 +92,10 @@ opened by a detection, routed to a team, claimed by a person, escalated to
 another team when it turns out to be something else, and closed by someone
 accountable.
 
-The queue mechanics, the permission model and the analyst UI are now in place
-(see *Delivered so far*), built on what was already there: the state machine,
-the audit trail and the tenancy model. What remains is routing rules and the
-SOC metrics reporting.
+The queue mechanics, the permission model, automatic routing and the analyst UI
+are now in place (see *Delivered so far*), built on what was already there: the
+state machine, the audit trail and the tenancy model. What remains is the SOC
+metrics reporting and the collaboration surface.
 
 ### Delivered so far
 
@@ -109,7 +109,7 @@ SOC metrics reporting.
 | Optimistic concurrency | **done** - `version` column; a stale write is a `409` rather than a silent overwrite |
 | Queue and handover views | **done** - `/teams/{slug}/queue` (oldest first) and `/teams/{slug}/handover` |
 | Verified on PostgreSQL | **done** - the CI integration job applies the migration and runs the suite against real PostgreSQL, not just SQLite batch mode |
-| Routing rules | **planned** - queues are populated by transfer today; `routing/*.yml` is the next piece |
+| Routing rules | **done** - `routing/*.yml` in git, priority-ordered with first-match-wins, 11 matchable fields, audited per decision, linted by the same CI gate as detections, plus a preview endpoint that returns every rule's verdict |
 | SLA timers and SOC metrics | **planned** - `acknowledged_at` is recorded, so MTTA is already derivable |
 | Presence, comments, mentions | **planned** |
 | Dashboard queue UI | **done** - `/queues` with team depth, scope switcher (My work / Unclaimed / All open), oldest-first ordering and per-row claim; claim/release, park-with-timer and transfer-with-reason on the incident page; the shift-handover report |
@@ -117,15 +117,7 @@ SOC metrics reporting.
 
 ### What is left
 
-**1. Routing rules.** Queues are populated by an explicit transfer today, which
-means a new incident sits unrouted until somebody moves it — the most obvious
-remaining gap. `routing_rules` (tenant, priority, match, team): match on
-scenario, correlation id, severity, ATT&CK tactic, asset criticality or source,
-first match wins, with the default queue as the fallback. Routing belongs in git
-for the same reasons detections do, so these should live in `routing/` as YAML
-and be linted by the same CI gate.
-
-**2. SLAs and the metrics that come with them.** Per-severity targets for
+**1. SLAs and the metrics that come with them.** Per-severity targets for
 time-to-acknowledge and time-to-resolve, stored as `sla_ack_due` /
 `sla_resolve_due` when the incident opens, with a worker flagging breaches and
 escalating. `acknowledged_at` is already recorded on first claim, so MTTA is
@@ -139,18 +131,18 @@ derivable now; the rest is the reporting layer:
 | Queue age | oldest unclaimed incident per queue | `/teams/{slug}/queue` is oldest-first, not aggregated |
 | Reopen rate | incidents leaving a terminal state, per closer | in the audit trail, not aggregated |
 
-**3. Presence and collision warnings.** Optimistic concurrency stops a stale
+**2. Presence and collision warnings.** Optimistic concurrency stops a stale
 write and the UI now explains it, but only *after* the analyst has acted. A
 short-lived presence key (Redis, ~30s TTL) driving "Dana is viewing this"
 prevents the collision rather than reporting it.
 
-**4. Collaboration surface.** Threaded comments with `@mention` (notify, and add
+**3. Collaboration surface.** Threaded comments with `@mention` (notify, and add
 the mentioned user as a watcher), explicit watchers independent of assignment,
 and case **linking and merging** — two incidents that turn out to be one
 intrusion should become one case with both evidence sets, which the supersession
 mechanism already models for the automated path.
 
-**5. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
+**4. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
 email) driven off the audit stream, firing on assignment, mention, SLA breach
 and escalation. The audit log is already the event source, so this is a
 consumer, not a new pipeline.
@@ -169,6 +161,8 @@ GET    /teams/{slug}/handover          # the shift handover projection
 POST   /incidents/{ref}/claim          POST /incidents/{ref}/unclaim
 POST   /incidents/{ref}/transfer       { team, reason }
 GET    /incidents?mine=true&team=&unclaimed=&order=oldest
+GET    /routing                        # the table, in evaluation order
+POST   /routing/preview                # where would this land, and why
 ```
 
 Still to come:
@@ -190,10 +184,16 @@ an error message and then reloaded, and the reload cleared it, so a `409` was
 invisible. Typecheck, lint and build all passed; only driving two browsers at
 one incident found it.
 
-Routing rules are smaller than they look because the rule-loading and linting
-machinery already exists and can be pointed at a second directory. SLAs are
-mostly reporting. Presence, comments and notifications are independent and can
-land in any order.
+Routing took an afternoon, and two of its bugs were only findable by running
+it: `rule_id` matching silently never fired during automatic routing (the
+incident carries `alert_ids`, not the alert objects the detection ids live on),
+and the first shipped table leaned on `scenario`, which only exists for
+correlated incidents — so single-alert incidents fell to the catch-all. The
+preview endpoint diagnosed the second one, which is a fair argument for having
+built it.
+
+SLAs are mostly reporting. Presence, comments and notifications are independent
+and can land in any order.
 
 ---
 

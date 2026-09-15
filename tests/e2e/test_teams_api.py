@@ -276,3 +276,59 @@ def test_a_queue_with_open_work_cannot_be_deleted(client, admin, incident_key) -
     blocked = client.delete("/api/v1/teams/identity", headers=admin)
     assert blocked.status_code == 409
     assert "still owns" in blocked.json()["detail"]
+
+
+# ------------------------------------------------------------------ routing
+def test_routing_table_is_exposed(client, admin) -> None:
+    listed = client.get("/api/v1/routing", headers=admin).json()
+    assert listed["enabled"] is True
+    assert listed["count"] >= 1
+    # Evaluation order is part of the contract: priority ascending.
+    priorities = [rule["priority"] for rule in listed["rules"]]
+    assert priorities == sorted(priorities)
+    assert listed["errors"] == [], "the shipped routing table must be clean"
+    assert listed["rules"][-1]["is_catch_all"], "the catch-all evaluates last"
+
+
+def test_routing_preview_explains_the_decision(client, admin) -> None:
+    preview = client.post(
+        "/api/v1/routing/preview",
+        headers=admin,
+        json={"tactics": ["credential_access"], "risk_score": 88},
+    ).json()
+    assert preview["via"] == "rule"
+    assert preview["team"] == "identity"
+    assert preview["matched"]["id"].startswith("route-identity")
+    # Every rule is reported with its verdict, not just the winner.
+    assert any(entry["matched"] for entry in preview["evaluated"])
+    assert len(preview["evaluated"]) == len(
+        client.get("/api/v1/routing", headers=admin).json()["rules"]
+    )
+
+
+def test_routing_preview_for_an_existing_incident(client, admin, incident_key) -> None:
+    preview = client.post(
+        "/api/v1/routing/preview", headers=admin, json={"incident": incident_key}
+    ).json()
+    assert preview["team"], "an incident must resolve to some queue"
+
+    missing = client.post("/api/v1/routing/preview", headers=admin, json={"incident": "INC-9999"})
+    assert missing.status_code == 404
+
+
+def test_a_new_incident_is_routed_on_creation(client, admin) -> None:
+    """End to end: teams exist, a scenario fires, the incident lands in a queue."""
+    for name, default in (("SOC Triage", True), ("Identity", False)):
+        client.post("/api/v1/teams", headers=admin, json={"name": name, "is_default": default})
+
+    client.post("/api/v1/lab/simulate", headers=admin, json={"scenario": "account_compromise"})
+    incidents = client.get("/api/v1/incidents", headers=admin).json()
+    assert incidents
+    routed = [item for item in incidents if item["team_slug"]]
+    assert routed, "auto-routing should have placed at least one incident"
+
+    # The decision is auditable.
+    trail = client.get("/api/v1/incidents/%s/audit" % routed[0]["key"], headers=admin).json()[
+        "entries"
+    ]
+    assert any(entry["action"] == "incident.routed" for entry in trail)

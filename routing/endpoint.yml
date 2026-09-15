@@ -1,0 +1,24 @@
+title: Endpoint owns host-level findings
+id: route-endpoint-0001
+priority: 30
+team: endpoint
+match:
+  rule_id: [sf-end-*]
+---
+title: Endpoint owns application data access
+id: route-endpoint-0002
+priority: 32
+team: endpoint
+description: >
+  Unusual access to sensitive data starts as a host or application question -
+  which process, which session, which export - before it becomes an identity
+  one.
+match:
+  rule_id: [sf-app-*]
+---
+title: Endpoint owns collection and exfiltration
+id: route-endpoint-0003
+priority: 50
+team: endpoint
+match:
+  tactic: [collection, exfiltration]
