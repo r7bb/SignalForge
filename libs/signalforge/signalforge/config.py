@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     #: (bump severity, notify, audit). Off leaves breaches visible but silent.
     sla_escalation_enabled: bool = True
 
+    # --- Notifications ----------------------------------------------------
+    #: Comma-separated channel names: log, webhook, slack. Empty disables
+    #: delivery but still records what would have been sent.
+    notify_channels: str = "log"
+    notify_webhook_url: Optional[str] = None
+    notify_enabled: bool = True
+
     # --- Correlation / risk ----------------------------------------------
     correlation_window_seconds: int = 900
     incident_dedup_window_seconds: int = 1800

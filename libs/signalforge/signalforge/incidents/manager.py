@@ -1016,7 +1016,19 @@ class IncidentManager:
                 previous_owner=previous_owner,
             )
             session.commit()
-            return incident
+
+        from ..notify import NotificationKind
+
+        self._notify(
+            tenant,
+            incident.key,
+            NotificationKind.TRANSFERRED,
+            "%s was transferred to %s" % (incident.key, team_slug),
+            reason,
+            actor=actor,
+            payload={"from_team": previous_team, "to_team": team_slug},
+        )
+        return incident
 
     def due_for_wake_up(
         self, tenant: Optional[str] = None, *, now: Optional[datetime] = None
@@ -1200,7 +1212,39 @@ class IncidentManager:
                 "SLA breach escalated",
                 extra={"incident": incident.key, "tenant": tenant, "detail": detail},
             )
-            return incident
+
+        from ..notify import NotificationKind
+
+        self._notify(
+            tenant,
+            incident.key,
+            NotificationKind.SLA_BREACHED,
+            "%s breached its SLA and was escalated to %s" % (incident.key, incident.severity.value),
+            detail,
+            payload={"detail": detail, "severity": incident.severity.value},
+        )
+        return incident
+
+    @property
+    def notifier(self):
+        """Lazily-built notification service."""
+        if getattr(self, "_notifier", None) is None:
+            from ..notify import NotificationService
+
+            self._notifier = NotificationService(self.session_factory, self.settings)
+        return self._notifier
+
+    def _notify(self, *args: Any, **kwargs: Any) -> None:
+        """Fire a notification without letting it break the operation.
+
+        A webhook being down must not fail a claim or a transfer: the work
+        happened, and the notification row records that delivery did not. The
+        retry sweep picks it up.
+        """
+        try:
+            self.notifier.notify(*args, **kwargs)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("notification dispatch failed", extra={"error": str(exc)})
 
     @property
     def routing(self):
@@ -1391,7 +1435,21 @@ class IncidentManager:
                 reply_to=parent_id,
             )
             session.commit()
-            return incident, mentions
+
+        if mentions.resolved:
+            from ..notify import NotificationKind
+
+            self._notify(
+                tenant,
+                incident.key,
+                NotificationKind.MENTIONED,
+                "%s mentioned you on %s" % (author, incident.key),
+                body[:500],
+                actor=author,
+                explicit=mentions.resolved,
+                payload={"incident": incident.key, "comment_id": note.id},
+            )
+        return incident, mentions
 
     def comments(self, tenant: str, reference: str) -> List[Dict[str, Any]]:
         """The comment thread, parents in order with their replies nested."""

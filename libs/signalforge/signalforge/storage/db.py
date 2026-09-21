@@ -330,6 +330,36 @@ class IncidentWatcher(Base, TimestampMixin):
     reason: Mapped[str] = mapped_column(String(32), default="manual")
 
 
+class Notification(Base, TimestampMixin):
+    """A queued notification and its delivery state.
+
+    Persisted before any channel is called, so a failure is visible and
+    retryable rather than lost in a log line - and so "nobody was told" can be
+    told apart from "nobody should have been told".
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (Index("ix_notifications_tenant_status", "tenant", "status"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    tenant: Mapped[str] = mapped_column(String(64), index=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    incident_id: Mapped[Optional[str]] = mapped_column(ForeignKey("incidents.id"), index=True)
+    incident_key: Mapped[Optional[str]] = mapped_column(String(32))
+    recipient_email: Mapped[str] = mapped_column(String(255), index=True)
+    recipient_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"))
+    #: Who caused the event. Never a recipient of it.
+    actor: Mapped[Optional[str]] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(512))
+    body: Mapped[str] = mapped_column(Text)
+    payload: Mapped[Any] = mapped_column(JsonType, default=dict)
+    #: pending | sent | failed | suppressed
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class IncidentSequence(Base):
     """Per-tenant counter behind the human-readable ``INC-####`` key."""
 

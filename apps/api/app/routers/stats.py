@@ -169,3 +169,21 @@ async def sla_breaches(
             for incident in breached
         ],
     }
+
+
+@router.get("/notifications")
+async def notification_log(
+    limit: int = Query(default=50, ge=1, le=200),
+    tenant: str = Depends(tenant_scope),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Recent notifications and whether they were delivered.
+
+    Persisting before sending is what makes this answerable: "nobody was told"
+    and "nobody should have been told" are different situations.
+    """
+    records = state.incidents.notifier.pending(tenant, limit=limit)
+    by_status: Dict[str, int] = {}
+    for record in records:
+        by_status[record["status"]] = by_status.get(record["status"], 0) + 1
+    return {"count": len(records), "by_status": by_status, "notifications": records}

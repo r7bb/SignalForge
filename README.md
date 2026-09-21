@@ -84,6 +84,7 @@ codebase running against the bundled lab telemetry — see
 | **Enrichment** | Multi-provider threat intel (internal classification, checked-in static feed, optional HTTP feed) with caching, retry/backoff and a circuit breaker |
 | **Case management** | Incidents with a validated state machine (including a `waiting` state with a wake-up timer), dedup, notes, evidence and a full audit trail |
 | **Queues and shifts** | Team queues an incident is *automatically routed to* by rules in git, before anyone claims it; claim/release, transfer with a mandatory reason, per-transition role permissions, optimistic concurrency on every write, and a shift-handover report |
+| **Notifications** | Pluggable channels (log, generic webhook, Slack) driven off incident events, persisted before delivery, retried with backoff, and never sent to the person who caused the event |
 | **Collaboration** | Threaded comments with `@mention` resolution, a watch list that records why each person is on it, and mention-driven watching that never implies ownership |
 | **Service levels** | Per-severity acknowledge/resolve clocks from a policy file, derived (never stale) breach state, once-only escalation by the worker, and MTTD/MTTA/MTTR, SLA attainment, queue age and reopen rate per team and analyst |
 | **Response** | Approval-gated playbooks scoped to this deployment's own lab resources, dry-run by default, four-eyes approval |
@@ -538,6 +539,33 @@ Mentions are highlighted from the **stored** resolved list rather than
 re-parsed in the browser: the server already decided who a handle meant, and
 re-deciding client-side would drift the moment somebody is renamed. Rendering is
 segment-based, never `innerHTML`, so a comment body cannot inject markup.
+
+### Notifications
+
+A mention that adds a watcher but tells nobody is half a feature, so mentions,
+transfers and SLA breaches dispatch through pluggable channels — `log` (the
+default), a generic JSON `webhook`, or `slack`.
+
+**Nobody is notified about their own action.** A channel that tells you what you
+just did is a channel that gets muted, and a muted channel is worse than none.
+Recipients are the watch list, the assignee, and — for a breach or a transfer —
+the owning team's leads, minus the actor.
+
+**Every notification is persisted before any channel is called.** That is what
+makes `GET /stats/notifications` answerable: "nobody was told" and "nobody
+*should* have been told" are different situations, and a log line cannot tell
+them apart. With no channel configured, notifications are marked `suppressed`
+rather than left `pending` forever for a retry that can never succeed.
+
+Retry backoff is 0 / 1 / 5 / 30 minutes and then gives up. A webhook that has
+refused four times across half an hour is not coming back inside this window,
+and an unbounded retry queue is one nobody drains. The policy lives in the
+dispatcher and nowhere else — channels report success or failure and never back
+off themselves, or two layers compound and the effective interval is anybody's
+guess.
+
+A failing channel never fails the operation. The claim, transfer or comment
+happened; the notification row records that the telling did not.
 
 ### Service levels and SOC metrics
 

@@ -95,8 +95,8 @@ accountable.
 The queue mechanics, the permission model, automatic routing, service-level
 clocks, the SOC metrics and the analyst UI are all in place (see *Delivered so
 far*), built on what was already there: the state machine, the audit trail and
-the tenancy model. What remains is presence, case linking/merging, and
-notification channels.
+the tenancy model. What remains is presence and manual case linking — the
+last two items in the phase.
 
 ### Delivered so far
 
@@ -115,7 +115,9 @@ notification channels.
 | SOC metrics | **done** - MTTD/MTTA/MTTR (split by disposition), SLA attainment, queue age and reopen rate per team and analyst; `GET /stats/soc` and a panel on the overview |
 | Threaded comments and mentions | **done** - replies nest under their parent, `@handle` resolves on local part or full address, ambiguity reported rather than guessed, unresolved handles returned to the author |
 | Watchers | **done** - separate from assignment, records why each person is watching, mention-driven watch never implies ownership |
+| Notification channels | **done** - log/webhook/Slack, driven off mention, transfer and SLA-breach events; persisted before delivery, 0/1/5/30-minute retry then give up, never sent to the actor; `GET /stats/notifications` is the delivery log |
 | Presence | **planned** - optimistic concurrency reports a collision; presence would prevent it |
+| Case linking and merging | **planned** - supersession already models the automated path |
 | Dashboard queue UI | **done** - `/queues` with team depth, scope switcher (My work / Unclaimed / All open), oldest-first ordering and per-row claim; claim/release, park-with-timer and transfer-with-reason on the incident page; the shift-handover report |
 | Concurrent-edit UX | **done** - a stale write surfaces the conflict and reloads the page rather than failing silently |
 
@@ -132,10 +134,8 @@ already models this for the automated path — when a correlation completes, the
 stage incidents it absorbed are closed with `Superseded by INC-…` — so the
 manual version is mostly an explicit relationship table plus the UI to drive it.
 
-**3. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
-email) driven off the audit stream, firing on assignment, mention, SLA breach
-and escalation. The audit log is already the event source, so this is a
-consumer, not a new pipeline.
+*(Notifications were the third item here and are now delivered — see the table
+above.)*
 
 ### API surface
 
@@ -157,6 +157,7 @@ GET    /stats/soc                      # MTTD/MTTA/MTTR, SLA attainment, queue a
 GET    /stats/sla-breaches             # open incidents past a deadline
 GET    /incidents/{ref}/comments       POST /incidents/{ref}/comments
 GET    /incidents/{ref}/watchers       POST/DELETE /incidents/{ref}/watch
+GET    /stats/notifications            # the delivery log
 ```
 
 Still to come:
@@ -197,7 +198,13 @@ the interesting part was the mention parser, where the word-boundary case (a
 bare address in prose reading as a handle) only showed up because a test
 asserted the *reason* nothing resolved rather than just the outcome.
 
-Presence and notifications are independent and can land in any order.
+Notifications were smaller than expected because the audience was already
+computable — watchers, assignee, team leads all existed. The design decisions
+took longer than the code: persist before sending (so a failure is visible),
+own the retry policy in one layer (so two do not compound), and never notify
+the actor (so the channel does not get muted).
+
+Presence is the last small item.
 
 ---
 
@@ -286,6 +293,23 @@ no foothold in the codebase is just a wish.
 - **Alert narrative clustering.** Group hundreds of alerts into a handful of
   behavioural narratives. Correlation already does this for known chains; this
   is the unsupervised version for chains nobody wrote a rule for.
+- **Rule impact simulation in the pull request.** Before a rule merges, run it
+  over the last 30 days of stored events and comment the result on the PR:
+  *this would have fired 1,412 times, 1,390 of them on one service account.*
+  The retro-hunt compiler already does the query; this wires it to CI so the
+  noise conversation happens before the merge rather than after the first
+  paging.
+- **Coverage against what is actually flowing.** Rule coverage by ATT&CK
+  tactic is only half the picture: four cloud rules and no cloud logs is zero
+  coverage. Crossing the rule set against per-source event volume turns
+  "we have a detection for that" into "we have a detection for that *and the
+  data it needs*".
+- **Field-mapping inference for a new source.** Given a sample of unmapped
+  logs, propose an OCSF mapping to review rather than writing one from
+  scratch. Onboarding a source is currently the slowest thing in the project.
+- **Time-travel validation.** Replay a resolved incident's exact event stream
+  through today's rules. If a real intrusion from March would no longer be
+  caught, that is a regression nobody would otherwise notice.
 
 ### Data platform and scale
 
@@ -305,6 +329,15 @@ no foothold in the codebase is just a wish.
   the alerts each source actually produced. "This log source costs X and has
   produced two detections in six months" is the report that decides SIEM
   budgets, and almost nothing exposes it.
+- **End-to-end provenance for an alert.** Which collector received it, which
+  mapper version normalised it, which rule revision matched: full lineage, so
+  "why did this fire?" is answerable months later when the rule has moved on.
+  Rule revisions and content hashes already exist; the collector and mapper
+  ends do not.
+- **Blue/green rule deployment.** Ship a rule to a shadow evaluator, compare
+  its alert rate against the live one, and roll back automatically if it
+  deviates beyond a threshold. The noise circuit breaker is the reactive
+  version of this; the proactive version never pages anyone.
 
 ### Intelligence and analytics
 
@@ -342,6 +375,45 @@ this is the area where security tooling most often overclaims:
   suggested next step was the one an analyst took. Any of the above without this
   is a demo, not a feature.
 
+### Analyst experience
+
+The part that decides whether a SOC tool is *used*, and the easiest to neglect
+because it does not show up in an architecture diagram:
+
+- **Keyboard-first triage.** `j`/`k` through the queue, one key to claim, one
+  to close, one to comment. Real triage tooling lives or dies on this; a mouse
+  round-trip per incident is the difference between clearing a queue and
+  dreading it.
+- **Saved views.** A named filter expression that becomes a queue — "critical,
+  unclaimed, cloud sources, last 24h". The filters exist; persisting and
+  sharing them does not.
+- **Bulk actions with a dry-run preview.** Closing forty alerts as false
+  positives should show exactly what will change before it changes it. The
+  response playbooks already established dry-run-by-default as the house
+  pattern.
+- **Similar-incident suggestion.** "This resembles INC-1889 from March, closed
+  as a false positive after the same check." The entity overlap needed to
+  compute it is already indexed.
+- **Investigation runbook checklists** rendered on the incident, per scenario
+  type, versioned like detections — see also *SOC operations* below.
+
+### Notification maturity
+
+Channels exist; the judgement about *when* to interrupt somebody does not:
+
+- **Per-user preferences and digests.** Hourly summary instead of per-event for
+  the kinds that do not need immediacy. Notification fatigue is alert fatigue
+  wearing a different hat, and this project has already argued that muting is
+  the real failure mode.
+- **Quiet hours and on-call awareness.** Route around somebody who is off
+  shift unless the notification is urgent — `URGENT_KINDS` already marks which
+  ones qualify.
+- **Escalation chains.** If nobody acknowledges within N minutes, tell the next
+  person, then the lead. The SLA clocks already compute the deadline this would
+  hang off.
+- **Delivery receipts.** Sent is not the same as read, and an unread breach
+  notification is worth escalating.
+
 ### SOC operations
 
 - **On-call rotation and escalation policies.** Who is paged at 03:00, and what
@@ -358,6 +430,22 @@ this is the area where security tooling most often overclaims:
 - **Post-incident review artefacts.** A blameless PIR document auto-populated
   from the timeline, the audit trail and the response actions taken.
 
+### Testing and quality
+
+- **Mutation testing on the detection engine.** Break the matcher on purpose
+  and confirm the suite notices. 476 passing tests is a number; whether they
+  would catch a subtly wrong `contains` is the actual question.
+- **Property-based tests for the Sigma parser.** Generate conditions, then
+  assert parse → render → parse is stable. Hand-written cases cover the
+  conditions I thought of.
+- **A golden corpus of normalised events.** Pin a sample of each source's
+  output as fixtures so a mapper change shows up as a reviewable diff instead
+  of a silently different `class_uid`.
+- **Chaos tests in the compose stack.** Kill the normaliser mid-pipeline and
+  assert zero loss. The failure-mode tests cover this against the in-process
+  bus; the distributed version is where the interesting bugs live.
+- **Make mypy a real gate** (gap 11): ~90 findings, currently advisory.
+
 ### Compliance and governance
 
 - **Auditor evidence export.** "Show me every privileged access change last
@@ -371,6 +459,12 @@ this is the area where security tooling most often overclaims:
   identifiers, with re-identification gated on a second approval — the same
   four-eyes pattern the playbooks use.
 - **Retention and legal hold per tenant**, including defensible deletion.
+- **Detection approval workflow.** A rule at `critical` needs a second
+  reviewer before it merges — the same second-pair-of-eyes principle the
+  response playbooks and false-positive closures already use, applied to the
+  detections themselves.
+- **Break-glass access.** Time-boxed elevation with a mandatory justification
+  and a loud audit entry, so the emergency path is not a permanent role.
 
 ### Integrations
 

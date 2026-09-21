@@ -20,6 +20,7 @@ from signalforge.enrich import ThreatIntelService
 from signalforge.incidents import IncidentError, IncidentManager
 from signalforge.logging_setup import configure_logging
 from signalforge.models.incident import IncidentStatus
+from signalforge.notify import NotificationService
 from signalforge.sbom import SbomService
 from signalforge.sigma import compile_rule, load_ruleset
 from signalforge.storage import db as dbm
@@ -87,6 +88,12 @@ if CELERY_AVAILABLE:
             "wake-parked-incidents": {
                 "task": "signalforge.wake_parked_incidents",
                 "schedule": 300.0,
+            },
+            # The backoff is 0/1/5/30 minutes, so a sweep every minute lets a
+            # notification go out close to when its backoff actually elapses.
+            "retry-notifications": {
+                "task": "signalforge.retry_notifications",
+                "schedule": 60.0,
             },
         },
     )
@@ -182,6 +189,20 @@ def wake_parked_incidents(tenant: Optional[str] = None) -> Dict[str, Any]:
             )
     log.info("woke parked incidents", extra={"count": len(woken)})
     return {"woken": len(woken), "incidents": woken}
+
+
+@app.task(name="signalforge.retry_notifications", bind=False)
+def retry_notifications(tenant: Optional[str] = None) -> Dict[str, Any]:
+    """Re-send notifications whose delivery failed and whose backoff elapsed.
+
+    Gives up after the attempt limit rather than retrying forever: a webhook
+    that has refused four times over half an hour is not coming back inside
+    this window, and an unbounded queue is one nobody drains.
+    """
+    dbm.init_db(settings)
+    service = NotificationService(dbm.get_session_factory(settings), settings)
+    report = service.retry_failed(tenant)
+    return report.to_dict()
 
 
 @app.task(name="signalforge.rematch_vulnerabilities", bind=False)
