@@ -7,10 +7,17 @@ import { useCallback, useEffect, useState } from "react";
 import { AttackPath } from "@/components/AttackPath";
 import { SeverityBadge, StatusBadge, Tag } from "@/components/Badge";
 import { RiskMeter } from "@/components/RiskMeter";
+import { CommentThread } from "@/components/CommentThread";
 import { Timeline } from "@/components/Timeline";
 import { api, ApiError, loadSession } from "@/lib/api";
 import { dateTime, duration, statusLabel } from "@/lib/format";
-import type { IncidentDetail, Session, Team } from "@/lib/types";
+import type {
+  IncidentComment,
+  IncidentDetail,
+  IncidentWatcher,
+  Session,
+  Team,
+} from "@/lib/types";
 
 export default function IncidentPage() {
   const params = useParams<{ reference: string }>();
@@ -29,15 +36,21 @@ export default function IncidentPage() {
   const [waitHours, setWaitHours] = useState(4);
   const [transferTeam, setTransferTeam] = useState("");
   const [transferReason, setTransferReason] = useState("");
+  const [threads, setThreads] = useState<IncidentComment[]>([]);
+  const [watchers, setWatchers] = useState<IncidentWatcher[]>([]);
 
   const load = useCallback(async () => {
     try {
-      const [detail, transitions] = await Promise.all([
+      const [detail, transitions, comments, watching] = await Promise.all([
         api.incident(reference),
         api.allowedTransitions(reference),
+        api.comments(reference),
+        api.watchers(reference),
       ]);
       setIncident(detail);
       setAllowed(transitions.allowed);
+      setThreads(comments.threads);
+      setWatchers(watching.watchers);
       setError(null);
     } catch (exc) {
       setError(exc instanceof ApiError ? exc.message : "Could not load the incident.");
@@ -82,6 +95,49 @@ export default function IncidentPage() {
     }
   }
 
+  /**
+   * Post a comment or a reply, and surface handles that matched nobody: a
+   * dropped mention leaves the author believing somebody was notified.
+   */
+  async function postComment(body: string, parentId?: string) {
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await api.addComment(reference, body, parentId);
+      setThreads(result.threads);
+      setWatchers(result.watchers);
+      if (!parentId) setNote("");
+      const notified = result.mentioned.length
+        ? ` Notified ${result.mentioned.join(", ")}.`
+        : "";
+      setMessage(`Comment added.${notified}`);
+      if (result.unresolved_mentions.length > 0) {
+        setError(
+          `No match for @${result.unresolved_mentions.join(", @")} - nobody was notified.`,
+        );
+      }
+      await load();
+    } catch (exc) {
+      setError(exc instanceof ApiError ? exc.message : "Could not add the comment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleWatch() {
+    setBusy(true);
+    try {
+      const result = watching ? await api.unwatch(reference) : await api.watch(reference);
+      setWatchers(result.watchers);
+      setMessage(result.watching ? "Watching this incident." : "No longer watching.");
+    } catch (exc) {
+      setError(exc instanceof ApiError ? exc.message : "Could not change the watch.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Hours -> an ISO wake-up time for the waiting state. */
   function wakeUpAt(hours: number): string {
     return new Date(Date.now() + hours * 3600 * 1000).toISOString();
@@ -101,6 +157,8 @@ export default function IncidentPage() {
   if (!incident) {
     return <p className="empty">Loading incident…</p>;
   }
+
+  const watching = watchers.some((watcher) => watcher.email === session?.user?.email);
 
   const selectedPlaybook =
     incident.suggested_playbooks.find((item) => item.name === playbook) ?? null;
@@ -196,6 +254,63 @@ export default function IncidentPage() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <h2 className="section-title">Discussion</h2>
+      <div className="grid grid-2">
+        <div className="card">
+          <div className="card-head">
+            <h3 className="card-title">Comments</h3>
+            <span className="card-note">
+              {threads.length === 0 ? "nothing yet" : `${threads.length} thread(s)`}
+            </span>
+          </div>
+          <CommentThread
+            threads={threads}
+            busy={busy}
+            onReply={(body, parentId) => postComment(body, parentId)}
+          />
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <h3 className="card-title">Watchers</h3>
+            <button
+              type="button"
+              className="chart-toggle"
+              disabled={busy}
+              onClick={() => toggleWatch()}
+            >
+              {watching ? "Stop watching" : "Watch"}
+            </button>
+          </div>
+          {watchers.length === 0 ? (
+            <p className="empty">Nobody is watching this incident.</p>
+          ) : (
+            <div className="stack" style={{ gap: 8 }}>
+              {watchers.map((watcher) => (
+                <div key={watcher.user_id} className="spread">
+                  <span style={{ fontSize: 13 }}>{watcher.email}</span>
+                  <Tag
+                    title={
+                      watcher.reason === "mentioned"
+                        ? "Added by an @mention"
+                        : watcher.reason === "assigned"
+                          ? "Added on assignment"
+                          : "Chose to watch"
+                    }
+                  >
+                    {watcher.reason}
+                  </Tag>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="card-note" style={{ marginTop: 12 }}>
+            Watching is not owning. Being mentioned puts you on this list without
+            making the incident yours.
+          </p>
+        </div>
       </div>
 
       <h2 className="section-title">Analyst actions</h2>
@@ -366,25 +481,23 @@ export default function IncidentPage() {
           )}
 
           <div className="form-field" style={{ marginTop: 16 }}>
-            <label htmlFor="note">Add a note</label>
+            <label htmlFor="note">Add a comment</label>
             <textarea
               id="note"
               className="input"
               rows={3}
               value={note}
               onChange={(event) => setNote(event.target.value)}
-              placeholder="What did you check, and what did you conclude?"
+              placeholder="What did you check, and what did you conclude? Use @name to pull somebody in."
             />
           </div>
           <button
             type="button"
             className="button"
             disabled={busy || note.trim().length === 0}
-            onClick={() =>
-              act(() => api.addNote(reference, note).then(() => setNote("")), "Note added.")
-            }
+            onClick={() => postComment(note)}
           >
-            Save note
+            Save comment
           </button>
         </div>
 

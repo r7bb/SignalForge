@@ -16,6 +16,7 @@ from ..routers.alerts import _summary as alert_summary
 from ..schemas import (
     AssignRequest,
     ClaimRequest,
+    CommentRequest,
     IncidentDetail,
     IncidentSummary,
     NoteRequest,
@@ -305,6 +306,87 @@ async def assign(
     _require(state, principal.tenant, reference)
     incident = state.incidents.assign(principal.tenant, reference, payload.owner, principal.email)
     return _summary(incident)
+
+
+@router.get("/{reference}/comments")
+async def list_comments(
+    reference: str,
+    tenant: str = Depends(tenant_scope),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """The comment thread: parents in order, replies nested under them."""
+    _require(state, tenant, reference)
+    threads = state.incidents.comments(tenant, reference)
+    return {
+        "count": sum(1 + len(item["replies"]) for item in threads),
+        "threads": threads,
+    }
+
+
+@router.post("/{reference}/comments", status_code=201)
+async def add_comment(
+    reference: str,
+    payload: CommentRequest,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Comment, optionally as a reply, resolving ``@mentions``.
+
+    Unresolved handles come back in the response rather than being dropped, so
+    the author finds out that nobody was actually notified.
+    """
+    _require(state, principal.tenant, reference)
+    _, mentions = state.incidents.add_comment(
+        principal.tenant,
+        reference,
+        principal.email,
+        payload.body,
+        author_id=principal.user_id,
+        parent_id=payload.parent_id,
+    )
+    return {
+        "threads": state.incidents.comments(principal.tenant, reference),
+        "mentioned": mentions.resolved,
+        "unresolved_mentions": mentions.unresolved,
+        "ambiguous_mentions": mentions.ambiguous,
+        "watchers": state.incidents.watchers(principal.tenant, reference),
+    }
+
+
+@router.get("/{reference}/watchers")
+async def list_watchers(
+    reference: str,
+    tenant: str = Depends(tenant_scope),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    _require(state, tenant, reference)
+    watchers = state.incidents.watchers(tenant, reference)
+    return {"count": len(watchers), "watchers": watchers}
+
+
+@router.post("/{reference}/watch")
+async def watch_incident(
+    reference: str,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Follow an incident without taking ownership of it."""
+    _require(state, principal.tenant, reference)
+    watchers = state.incidents.watch(
+        principal.tenant, reference, user_id=principal.user_id, email=principal.email
+    )
+    return {"watching": True, "watchers": watchers}
+
+
+@router.delete("/{reference}/watch")
+async def unwatch_incident(
+    reference: str,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    _require(state, principal.tenant, reference)
+    watchers = state.incidents.unwatch(principal.tenant, reference, user_id=principal.user_id)
+    return {"watching": False, "watchers": watchers}
 
 
 @router.post("/{reference}/notes", response_model=IncidentDetail)

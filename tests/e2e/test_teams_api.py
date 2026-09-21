@@ -332,3 +332,90 @@ def test_a_new_incident_is_routed_on_creation(client, admin) -> None:
         "entries"
     ]
     assert any(entry["action"] == "incident.routed" for entry in trail)
+
+
+# ------------------------------------------------------------ collaboration
+def test_comment_thread_over_http(client, admin, analysts, incident_key) -> None:
+    top = client.post(
+        "/api/v1/incidents/%s/comments" % incident_key,
+        headers=analysts["dana"],
+        json={"body": "Tor exit node. @sam can you confirm the role change?"},
+    )
+    assert top.status_code == 201, top.text
+    body = top.json()
+    assert body["mentioned"] == ["sam@acme.test"]
+    assert body["unresolved_mentions"] == []
+    parent = body["threads"][0]["id"]
+
+    reply = client.post(
+        "/api/v1/incidents/%s/comments" % incident_key,
+        headers=analysts["sam"],
+        json={"body": "Confirmed, not in the calendar.", "parent_id": parent},
+    )
+    assert reply.status_code == 201, reply.text
+
+    thread = client.get("/api/v1/incidents/%s/comments" % incident_key, headers=admin).json()
+    assert thread["count"] == 2
+    assert len(thread["threads"]) == 1, "the reply nests, it is not a second thread"
+    assert thread["threads"][0]["replies"][0]["author"] == "sam@acme.test"
+
+
+def test_an_unresolved_mention_is_reported_to_the_author(client, analysts, incident_key) -> None:
+    response = client.post(
+        "/api/v1/incidents/%s/comments" % incident_key,
+        headers=analysts["dana"],
+        json={"body": "@nobody take a look"},
+    )
+    assert response.status_code == 201
+    assert response.json()["unresolved_mentions"] == ["nobody"]
+    assert response.json()["mentioned"] == []
+
+
+def test_a_bare_address_in_a_comment_is_not_treated_as_a_mention(
+    client, analysts, incident_key
+) -> None:
+    response = client.post(
+        "/api/v1/incidents/%s/comments" % incident_key,
+        headers=analysts["dana"],
+        json={"body": "the account alex@example.com was disabled"},
+    )
+    assert response.status_code == 201
+    assert response.json()["unresolved_mentions"] == []
+
+
+def test_an_empty_comment_is_rejected(client, analysts, incident_key) -> None:
+    response = client.post(
+        "/api/v1/incidents/%s/comments" % incident_key,
+        headers=analysts["dana"],
+        json={"body": "   "},
+    )
+    assert response.status_code in (409, 422)
+
+
+def test_watch_and_unwatch_over_http(client, admin, analysts, incident_key) -> None:
+    watched = client.post("/api/v1/incidents/%s/watch" % incident_key, headers=analysts["sam"])
+    assert watched.status_code == 200
+    assert watched.json()["watching"] is True
+    assert [w["email"] for w in watched.json()["watchers"]] == ["sam@acme.test"]
+
+    # Being mentioned adds a watcher but must not assign the incident.
+    client.post(
+        "/api/v1/incidents/%s/comments" % incident_key,
+        headers=analysts["dana"],
+        json={"body": "@rio eyes on this please"},
+    )
+    listed = client.get("/api/v1/incidents/%s/watchers" % incident_key, headers=admin).json()
+    reasons = {w["email"]: w["reason"] for w in listed["watchers"]}
+    assert reasons["rio@acme.test"] == "mentioned"
+    assert client.get("/api/v1/incidents/%s" % incident_key, headers=admin).json()["owner"] is None
+
+    dropped = client.delete("/api/v1/incidents/%s/watch" % incident_key, headers=analysts["sam"])
+    assert dropped.status_code == 200
+    assert "sam@acme.test" not in [w["email"] for w in dropped.json()["watchers"]]
+
+
+def test_comments_need_the_analyst_role(client, incident_key) -> None:
+    unauthenticated = client.post(
+        "/api/v1/incidents/%s/comments" % incident_key, json={"body": "hello"}
+    )
+    assert unauthenticated.status_code in (401, 403)

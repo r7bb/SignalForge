@@ -11,8 +11,11 @@
 
 import type {
   AlertSummary,
+  CommentResult,
+  IncidentComment,
   IncidentDetail,
   IncidentSummary,
+  IncidentWatcher,
   LintReport,
   Overview,
   PlaybookOption,
@@ -194,6 +197,35 @@ export const api = {
 
   addNote: (reference: string, body: string) =>
     request<IncidentDetail>(`/incidents/${reference}/notes`, json({ body })),
+
+  // -- collaboration ------------------------------------------------------
+  comments: (reference: string) =>
+    request<{ count: number; threads: IncidentComment[] }>(
+      `/incidents/${reference}/comments`,
+    ),
+
+  addComment: (reference: string, body: string, parentId?: string) =>
+    request<CommentResult>(
+      `/incidents/${reference}/comments`,
+      json({ body, parent_id: parentId }),
+    ),
+
+  watchers: (reference: string) =>
+    request<{ count: number; watchers: IncidentWatcher[] }>(
+      `/incidents/${reference}/watchers`,
+    ),
+
+  watch: (reference: string) =>
+    request<{ watching: boolean; watchers: IncidentWatcher[] }>(
+      `/incidents/${reference}/watch`,
+      json({}),
+    ),
+
+  unwatch: (reference: string) =>
+    request<{ watching: boolean; watchers: IncidentWatcher[] }>(
+      `/incidents/${reference}/watch`,
+      { method: "DELETE" },
+    ),
 
   // -- response -----------------------------------------------------------
   playbooks: () => request<{ playbooks: PlaybookOption[] }>("/response/playbooks"),

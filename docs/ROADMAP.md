@@ -95,8 +95,8 @@ accountable.
 The queue mechanics, the permission model, automatic routing, service-level
 clocks, the SOC metrics and the analyst UI are all in place (see *Delivered so
 far*), built on what was already there: the state machine, the audit trail and
-the tenancy model. What remains is the collaboration surface — presence,
-threaded comments with mentions, case linking, and notifications.
+the tenancy model. What remains is presence, case linking/merging, and
+notification channels.
 
 ### Delivered so far
 
@@ -113,7 +113,9 @@ threaded comments with mentions, case linking, and notifications.
 | Routing rules | **done** - `routing/*.yml` in git, priority-ordered with first-match-wins, 11 matchable fields, audited per decision, linted by the same CI gate as detections, plus a preview endpoint that returns every rule's verdict |
 | SLA timers | **done** - per-severity acknowledge/resolve clocks from `schemas/sla.yml`, derived breach state, once-only worker escalation, `GET /stats/sla-breaches`, countdown column on the queue |
 | SOC metrics | **done** - MTTD/MTTA/MTTR (split by disposition), SLA attainment, queue age and reopen rate per team and analyst; `GET /stats/soc` and a panel on the overview |
-| Presence, comments, mentions | **planned** |
+| Threaded comments and mentions | **done** - replies nest under their parent, `@handle` resolves on local part or full address, ambiguity reported rather than guessed, unresolved handles returned to the author |
+| Watchers | **done** - separate from assignment, records why each person is watching, mention-driven watch never implies ownership |
+| Presence | **planned** - optimistic concurrency reports a collision; presence would prevent it |
 | Dashboard queue UI | **done** - `/queues` with team depth, scope switcher (My work / Unclaimed / All open), oldest-first ordering and per-row claim; claim/release, park-with-timer and transfer-with-reason on the incident page; the shift-handover report |
 | Concurrent-edit UX | **done** - a stale write surfaces the conflict and reloads the page rather than failing silently |
 
@@ -124,11 +126,11 @@ write and the UI now explains it, but only *after* the analyst has acted. A
 short-lived presence key (Redis, ~30s TTL) driving "Dana is viewing this"
 prevents the collision rather than reporting it.
 
-**2. Collaboration surface.** Threaded comments with `@mention` (notify, and add
-the mentioned user as a watcher), explicit watchers independent of assignment,
-and case **linking and merging** — two incidents that turn out to be one
-intrusion should become one case with both evidence sets, which the supersession
-mechanism already models for the automated path.
+**2. Case linking and merging.** Two incidents that turn out to be one intrusion
+should become one case with both evidence sets. The supersession mechanism
+already models this for the automated path — when a correlation completes, the
+stage incidents it absorbed are closed with `Superseded by INC-…` — so the
+manual version is mostly an explicit relationship table plus the UI to drive it.
 
 **3. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
 email) driven off the audit stream, firing on assignment, mention, SLA breach
@@ -153,15 +155,15 @@ GET    /routing                        # the table, in evaluation order
 POST   /routing/preview                # where would this land, and why
 GET    /stats/soc                      # MTTD/MTTA/MTTR, SLA attainment, queue age
 GET    /stats/sla-breaches             # open incidents past a deadline
+GET    /incidents/{ref}/comments       POST /incidents/{ref}/comments
+GET    /incidents/{ref}/watchers       POST/DELETE /incidents/{ref}/watch
 ```
 
 Still to come:
 
 ```
-POST   /incidents/{ref}/watch          DELETE /incidents/{ref}/watch
-GET    /incidents/{ref}/comments       POST /incidents/{ref}/comments
-POST   /incidents/{ref}/link           { incident, relationship }
 GET    /incidents/{ref}/presence       # who else is looking at this
+POST   /incidents/{ref}/link           { incident, relationship }
 ```
 
 ### Sizing, honestly
@@ -190,8 +192,12 @@ dividing by what is closed *now* means a reopened incident vanishes from it
 exactly when the metric matters, so it divides by analyst close actions from the
 audit trail instead.
 
-Presence, comments and notifications are independent and can land in any
-order.
+Comments took less than expected because notes already existed to extend;
+the interesting part was the mention parser, where the word-boundary case (a
+bare address in prose reading as a handle) only showed up because a test
+asserted the *reason* nothing resolved rather than just the outcome.
+
+Presence and notifications are independent and can land in any order.
 
 ---
 

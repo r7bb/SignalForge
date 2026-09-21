@@ -214,6 +214,12 @@ class NoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
 
 
+class CommentRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=8000)
+    #: Set to reply to an existing comment on the same incident.
+    parent_id: Optional[str] = None
+
+
 class ResponseRequest(BaseModel):
     playbook: str
     target: Optional[str] = None

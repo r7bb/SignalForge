@@ -370,3 +370,30 @@ export interface HandoverReport {
   unclaimed: number;
   incidents: HandoverRow[];
 }
+
+export interface IncidentComment {
+  id: string;
+  author: string;
+  author_id?: string | null;
+  body: string;
+  mentions: string[];
+  parent_id?: string | null;
+  created_at: string;
+  edited_at?: string | null;
+  replies: IncidentComment[];
+}
+
+export interface IncidentWatcher {
+  user_id: string;
+  email: string;
+  reason: "mentioned" | "assigned" | "manual";
+  since: string;
+}
+
+export interface CommentResult {
+  threads: IncidentComment[];
+  mentioned: string[];
+  unresolved_mentions: string[];
+  ambiguous_mentions: Record<string, string[]>;
+  watchers: IncidentWatcher[];
+}

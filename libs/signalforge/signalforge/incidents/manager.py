@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -42,6 +42,9 @@ from ..models.incident import (
 from ..models.ocsf import OcsfEvent
 from ..storage import db as dbm
 from ..storage.events import EventStore
+
+if TYPE_CHECKING:  # import cycle at runtime; only needed for the annotation
+    from .mentions import MentionResult
 
 log = logging.getLogger("signalforge.incidents")
 
@@ -1287,9 +1290,232 @@ class IncidentManager:
             self._teams = TeamService(self.session_factory)
         return self._teams
 
-    def add_note(self, tenant: str, reference: str, author: str, body: str) -> Incident:
+    # ------------------------------------------------------------------ #
+    # Collaboration: comments, mentions, watchers
+    # ------------------------------------------------------------------ #
+    def tenant_emails(self, session: Session, tenant: str) -> List[str]:
+        tenant_row = session.scalars(select(dbm.Tenant).where(dbm.Tenant.key == tenant)).first()
+        if tenant_row is None:
+            return []
+        return list(
+            session.scalars(select(dbm.User.email).where(dbm.User.tenant_id == tenant_row.id)).all()
+        )
+
+    def add_comment(
+        self,
+        tenant: str,
+        reference: str,
+        author: str,
+        body: str,
+        *,
+        author_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+    ) -> Tuple[Incident, MentionResult]:
+        """Add a comment, resolving ``@mentions`` and watching those it names.
+
+        Returns the incident **and** the mention result: a handle that matched
+        nobody is reported back rather than dropped, because silently
+        discarding it leaves the author believing somebody was notified.
+        """
+        from .mentions import resolve_mentions
+
         if not body.strip():
-            raise IncidentError("note body cannot be empty")
+            raise IncidentError("comment body cannot be empty")
+
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            incident = _row_to_incident(row)
+
+            if parent_id is not None:
+                parent = session.get(dbm.IncidentNote, parent_id)
+                if parent is None or parent.incident_id != row.id:
+                    raise IncidentError(
+                        "cannot reply to %r: it is not a comment on %s" % (parent_id, incident.key)
+                    )
+
+            mentions = resolve_mentions(body, self.tenant_emails(session, tenant))
+            note = IncidentNote(
+                author=author,
+                author_id=author_id,
+                body=body,
+                parent_id=parent_id,
+                mentions=list(mentions.resolved),
+            )
+            incident.notes.append(note)
+            incident.timeline.append(
+                TimelineEntry(
+                    time=note.time,
+                    kind="note",
+                    title="Reply" if parent_id else "Analyst note",
+                    detail=body,
+                    actor=author,
+                )
+            )
+            incident.record(
+                "incident.note_added",
+                actor=author,
+                detail=body[:200],
+                mentions=list(mentions.resolved),
+                reply_to=parent_id,
+            )
+            _incident_to_row(incident, row)
+            session.add(
+                dbm.IncidentNote(
+                    id=note.id,
+                    incident_id=incident.incident_id,
+                    author=author,
+                    author_id=author_id,
+                    body=body,
+                    parent_id=parent_id,
+                    mentions=list(mentions.resolved),
+                )
+            )
+            # Being mentioned puts you on the watch list but does not make the
+            # incident yours - watching and owning are different things.
+            for email in mentions.resolved:
+                self._add_watcher_row(session, tenant, row.id, email, reason="mentioned")
+            if author_id:
+                self._add_watcher_row(
+                    session, tenant, row.id, author, reason="manual", user_id=author_id
+                )
+
+            dbm.record_audit(
+                session,
+                tenant=tenant,
+                actor=author,
+                action="incident.note_added",
+                entity_type="incident",
+                entity_id=incident.incident_id,
+                detail=body[:200],
+                mentions=list(mentions.resolved),
+                reply_to=parent_id,
+            )
+            session.commit()
+            return incident, mentions
+
+    def comments(self, tenant: str, reference: str) -> List[Dict[str, Any]]:
+        """The comment thread, parents in order with their replies nested."""
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            rows = session.scalars(
+                select(dbm.IncidentNote)
+                .where(dbm.IncidentNote.incident_id == row.id)
+                .order_by(dbm.IncidentNote.created_at.asc())
+            ).all()
+
+        def payload(note: Any) -> Dict[str, Any]:
+            return {
+                "id": note.id,
+                "author": note.author,
+                "author_id": note.author_id,
+                "body": note.body,
+                "mentions": list(note.mentions or []),
+                "parent_id": note.parent_id,
+                "created_at": _as_utc(note.created_at),
+                "edited_at": _as_utc_optional(note.edited_at),
+                "replies": [],
+            }
+
+        threads: Dict[str, Dict[str, Any]] = {}
+        ordered: List[Dict[str, Any]] = []
+        for note in rows:
+            if note.parent_id is None:
+                item = payload(note)
+                threads[note.id] = item
+                ordered.append(item)
+        for note in rows:
+            if note.parent_id is not None:
+                parent = threads.get(note.parent_id)
+                if parent is not None:
+                    parent["replies"].append(payload(note))
+                else:
+                    # An orphaned reply (its parent was removed) is still
+                    # evidence; show it at the top level rather than hide it.
+                    ordered.append(payload(note))
+        return ordered
+
+    def watchers(self, tenant: str, reference: str) -> List[Dict[str, Any]]:
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            pairs = session.execute(
+                select(dbm.IncidentWatcher, dbm.User)
+                .join(dbm.User, dbm.User.id == dbm.IncidentWatcher.user_id)
+                .where(dbm.IncidentWatcher.incident_id == row.id)
+                .order_by(dbm.User.email)
+            ).all()
+            return [
+                {
+                    "user_id": watcher.user_id,
+                    "email": user.email,
+                    "reason": watcher.reason,
+                    "since": _as_utc(watcher.created_at),
+                }
+                for watcher, user in pairs
+            ]
+
+    def watch(
+        self, tenant: str, reference: str, *, user_id: str, email: str, reason: str = "manual"
+    ) -> List[Dict[str, Any]]:
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            self._add_watcher_row(session, tenant, row.id, email, reason=reason, user_id=user_id)
+            session.commit()
+        return self.watchers(tenant, reference)
+
+    def unwatch(self, tenant: str, reference: str, *, user_id: str) -> List[Dict[str, Any]]:
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            watcher = session.scalars(
+                select(dbm.IncidentWatcher).where(
+                    dbm.IncidentWatcher.incident_id == row.id,
+                    dbm.IncidentWatcher.user_id == user_id,
+                )
+            ).first()
+            if watcher is not None:
+                session.delete(watcher)
+                session.commit()
+        return self.watchers(tenant, reference)
+
+    def _add_watcher_row(
+        self,
+        session: Session,
+        tenant: str,
+        incident_id: str,
+        email: str,
+        *,
+        reason: str,
+        user_id: Optional[str] = None,
+    ) -> None:
+        """Idempotent: a second mention of the same person changes nothing."""
+        if user_id is None:
+            tenant_row = session.scalars(select(dbm.Tenant).where(dbm.Tenant.key == tenant)).first()
+            if tenant_row is None:
+                return
+            user = session.scalars(
+                select(dbm.User).where(dbm.User.tenant_id == tenant_row.id, dbm.User.email == email)
+            ).first()
+            if user is None:
+                return
+            user_id = user.id
+
+        existing = session.scalars(
+            select(dbm.IncidentWatcher).where(
+                dbm.IncidentWatcher.incident_id == incident_id,
+                dbm.IncidentWatcher.user_id == user_id,
+            )
+        ).first()
+        if existing is not None:
+            return
+        session.add(dbm.IncidentWatcher(incident_id=incident_id, user_id=user_id, reason=reason))
+
+    def add_note(self, tenant: str, reference: str, author: str, body: str) -> Incident:
+        """Back-compatible wrapper: a comment with no parent and no author id."""
+        incident, _ = self.add_comment(tenant, reference, author, body)
+        return incident
+
+    def _legacy_add_note(self, tenant: str, reference: str, author: str, body: str) -> Incident:
+        if not body.strip():
+            raise IncidentError("comment body cannot be empty")
         with self.session_factory() as session:
             row = self._require(session, tenant, reference)
             incident = _row_to_incident(row)

@@ -134,7 +134,23 @@ class IncidentNote(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     time: datetime = Field(default_factory=utcnow)
     author: str
+    author_id: Optional[str] = None
     body: str
+    #: Set on a reply. One level is what the UI renders.
+    parent_id: Optional[str] = None
+    #: Emails the ``@mentions`` resolved to when the note was written.
+    mentions: List[str] = Field(default_factory=list)
+    edited_at: Optional[datetime] = None
+
+
+class IncidentWatcherEntry(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    user_id: str
+    email: str = ""
+    #: mentioned | assigned | manual
+    reason: str = "manual"
+    since: datetime = Field(default_factory=utcnow)
 
 
 class Incident(BaseModel):

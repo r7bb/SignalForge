@@ -282,15 +282,52 @@ class Incident(Base, TimestampMixin):
 
 
 class IncidentNote(Base):
+    """An analyst comment.
+
+    Threaded and mention-aware rather than a separate "comments" concept: one
+    place where analysts write things about an incident is easier to reason
+    about than two that overlap.
+    """
+
     __tablename__ = "incident_notes"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id"), index=True)
     author: Mapped[str] = mapped_column(String(255))
+    #: Link to the user row when the author is a real account; system-written
+    #: notes (the SLA monitor, the correlator) leave it null.
+    author_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), index=True)
     body: Mapped[str] = mapped_column(Text)
+    #: A reply points at the note it answers. One level is all the UI renders,
+    #: but the column does not stop a deeper chain.
+    parent_id: Mapped[Optional[str]] = mapped_column(ForeignKey("incident_notes.id"), index=True)
+    #: Emails the ``@mentions`` in the body resolved to, stored so the thread
+    #: renders the same way later even if somebody is renamed or removed.
+    mentions: Mapped[Any] = mapped_column(JsonType, default=list)
+    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     incident: Mapped[Incident] = relationship(back_populates="notes")
+
+
+class IncidentWatcher(Base, TimestampMixin):
+    """Who hears about an incident, independent of who owns it.
+
+    Deliberately separate from assignment: a lead watching six cases is not
+    working six cases, and being mentioned in one should not make it yours.
+    """
+
+    __tablename__ = "incident_watchers"
+    __table_args__ = (
+        UniqueConstraint("incident_id", "user_id", name="uq_incident_watchers_incident_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    #: mentioned | assigned | manual - why they are on the list, so an
+    #: automatic watch can be distinguished from a deliberate one.
+    reason: Mapped[str] = mapped_column(String(32), default="manual")
 
 
 class IncidentSequence(Base):

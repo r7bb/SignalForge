@@ -84,6 +84,7 @@ codebase running against the bundled lab telemetry — see
 | **Enrichment** | Multi-provider threat intel (internal classification, checked-in static feed, optional HTTP feed) with caching, retry/backoff and a circuit breaker |
 | **Case management** | Incidents with a validated state machine (including a `waiting` state with a wake-up timer), dedup, notes, evidence and a full audit trail |
 | **Queues and shifts** | Team queues an incident is *automatically routed to* by rules in git, before anyone claims it; claim/release, transfer with a mandatory reason, per-transition role permissions, optimistic concurrency on every write, and a shift-handover report |
+| **Collaboration** | Threaded comments with `@mention` resolution, a watch list that records why each person is on it, and mention-driven watching that never implies ownership |
 | **Service levels** | Per-severity acknowledge/resolve clocks from a policy file, derived (never stale) breach state, once-only escalation by the worker, and MTTD/MTTA/MTTR, SLA attainment, queue age and reopen rate per team and analyst |
 | **Response** | Approval-gated playbooks scoped to this deployment's own lab resources, dry-run by default, four-eyes approval |
 | **Supply chain** | CycloneDX/SPDX ingestion, version-range vulnerability matching, "which applications contain it" impact queries |
@@ -505,6 +506,38 @@ curl -X POST localhost:8000/api/v1/routing/preview \
 That example is a real one. MFA removal is tagged `defense_evasion`, so a
 tactic-only table hands it to whoever owns that tactic — cloud security. The
 detection id is unambiguous, and the preview is how that was diagnosed.
+
+### Discussion and watchers
+
+Notes became **threaded comments** rather than gaining a parallel "comments"
+concept beside them — one place where analysts write things about an incident is
+easier to reason about than two that overlap.
+
+```
+dana@acme.test   Source 185.220.101.7 is a known Tor exit. @sam can you confirm?
+  └ sam@acme.test  Confirmed - not in the change calendar. cc @rio
+```
+
+`@dana` resolves on the local part when it is unambiguous inside the tenant;
+`@dana@acme.test` always resolves. A local part shared by two people is reported
+**ambiguous rather than guessed at**, and a handle matching nobody comes back in
+the response instead of being dropped — silently discarding it leaves the author
+believing somebody was notified.
+
+A bare address in prose is not a mention. Without a word-boundary check,
+"the account dana@acme.test was disabled" parses `@acme.test` as a handle and
+warns the author about a mention they never wrote.
+
+**Watching is not owning.** Being mentioned puts you on the notification list
+without making the incident yours — a lead watching six cases is not working six
+cases. The watch list records *why* each person is on it (`mentioned`,
+`assigned`, `manual`), and a deliberate watch is never downgraded by a later
+mention.
+
+Mentions are highlighted from the **stored** resolved list rather than
+re-parsed in the browser: the server already decided who a handle meant, and
+re-deciding client-side would drift the moment somebody is renamed. Rendering is
+segment-based, never `innerHTML`, so a comment body cannot inject markup.
 
 ### Service levels and SOC metrics
 
