@@ -160,6 +160,12 @@ class Incident(BaseModel):
     team_slug: Optional[str] = None
     #: When someone first took responsibility - the clock that MTTA measures.
     acknowledged_at: Optional[datetime] = None
+    #: Service-level deadlines, set from the severity when the incident opens.
+    #: Breach is derived from these against acknowledged_at/closed_at rather
+    #: than stored, so it cannot go stale.
+    sla_ack_due: Optional[datetime] = None
+    sla_resolve_due: Optional[datetime] = None
+    sla_escalated_at: Optional[datetime] = None
     #: Optimistic-concurrency token: a write carrying a stale version is
     #: rejected rather than silently overwriting another analyst's edit.
     version: int = 1

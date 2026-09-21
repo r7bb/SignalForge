@@ -92,10 +92,11 @@ opened by a detection, routed to a team, claimed by a person, escalated to
 another team when it turns out to be something else, and closed by someone
 accountable.
 
-The queue mechanics, the permission model, automatic routing and the analyst UI
-are now in place (see *Delivered so far*), built on what was already there: the
-state machine, the audit trail and the tenancy model. What remains is the SOC
-metrics reporting and the collaboration surface.
+The queue mechanics, the permission model, automatic routing, service-level
+clocks, the SOC metrics and the analyst UI are all in place (see *Delivered so
+far*), built on what was already there: the state machine, the audit trail and
+the tenancy model. What remains is the collaboration surface — presence,
+threaded comments with mentions, case linking, and notifications.
 
 ### Delivered so far
 
@@ -110,39 +111,26 @@ metrics reporting and the collaboration surface.
 | Queue and handover views | **done** - `/teams/{slug}/queue` (oldest first) and `/teams/{slug}/handover` |
 | Verified on PostgreSQL | **done** - the CI integration job applies the migration and runs the suite against real PostgreSQL, not just SQLite batch mode |
 | Routing rules | **done** - `routing/*.yml` in git, priority-ordered with first-match-wins, 11 matchable fields, audited per decision, linted by the same CI gate as detections, plus a preview endpoint that returns every rule's verdict |
-| SLA timers and SOC metrics | **planned** - `acknowledged_at` is recorded, so MTTA is already derivable |
+| SLA timers | **done** - per-severity acknowledge/resolve clocks from `schemas/sla.yml`, derived breach state, once-only worker escalation, `GET /stats/sla-breaches`, countdown column on the queue |
+| SOC metrics | **done** - MTTD/MTTA/MTTR (split by disposition), SLA attainment, queue age and reopen rate per team and analyst; `GET /stats/soc` and a panel on the overview |
 | Presence, comments, mentions | **planned** |
 | Dashboard queue UI | **done** - `/queues` with team depth, scope switcher (My work / Unclaimed / All open), oldest-first ordering and per-row claim; claim/release, park-with-timer and transfer-with-reason on the incident page; the shift-handover report |
 | Concurrent-edit UX | **done** - a stale write surfaces the conflict and reloads the page rather than failing silently |
 
 ### What is left
 
-**1. SLAs and the metrics that come with them.** Per-severity targets for
-time-to-acknowledge and time-to-resolve, stored as `sla_ack_due` /
-`sla_resolve_due` when the incident opens, with a worker flagging breaches and
-escalating. `acknowledged_at` is already recorded on first claim, so MTTA is
-derivable now; the rest is the reporting layer:
-
-| Metric | Definition | Status |
-|---|---|---|
-| MTTD | detection time − first event time | derivable from the timeline |
-| MTTA | `acknowledged_at` − `created_at` | **data present**, no reporting yet |
-| MTTR | `closed_at` − `created_at`, by disposition | **data present**, no reporting yet |
-| Queue age | oldest unclaimed incident per queue | `/teams/{slug}/queue` is oldest-first, not aggregated |
-| Reopen rate | incidents leaving a terminal state, per closer | in the audit trail, not aggregated |
-
-**2. Presence and collision warnings.** Optimistic concurrency stops a stale
+**1. Presence and collision warnings.** Optimistic concurrency stops a stale
 write and the UI now explains it, but only *after* the analyst has acted. A
 short-lived presence key (Redis, ~30s TTL) driving "Dana is viewing this"
 prevents the collision rather than reporting it.
 
-**3. Collaboration surface.** Threaded comments with `@mention` (notify, and add
+**2. Collaboration surface.** Threaded comments with `@mention` (notify, and add
 the mentioned user as a watcher), explicit watchers independent of assignment,
 and case **linking and merging** — two incidents that turn out to be one
 intrusion should become one case with both evidence sets, which the supersession
 mechanism already models for the automated path.
 
-**4. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
+**3. Notifications.** A pluggable channel interface (webhook, Slack, PagerDuty,
 email) driven off the audit stream, firing on assignment, mention, SLA breach
 and escalation. The audit log is already the event source, so this is a
 consumer, not a new pipeline.
@@ -163,6 +151,8 @@ POST   /incidents/{ref}/transfer       { team, reason }
 GET    /incidents?mine=true&team=&unclaimed=&order=oldest
 GET    /routing                        # the table, in evaluation order
 POST   /routing/preview                # where would this land, and why
+GET    /stats/soc                      # MTTD/MTTA/MTTR, SLA attainment, queue age
+GET    /stats/sla-breaches             # open incidents past a deadline
 ```
 
 Still to come:
@@ -171,7 +161,6 @@ Still to come:
 POST   /incidents/{ref}/watch          DELETE /incidents/{ref}/watch
 GET    /incidents/{ref}/comments       POST /incidents/{ref}/comments
 POST   /incidents/{ref}/link           { incident, relationship }
-GET    /stats/soc                      # MTTA/MTTR/queue age by team and analyst
 GET    /incidents/{ref}/presence       # who else is looking at this
 ```
 
@@ -192,8 +181,17 @@ correlated incidents — so single-alert incidents fell to the catch-all. The
 preview endpoint diagnosed the second one, which is a fair argument for having
 built it.
 
-SLAs are mostly reporting. Presence, comments and notifications are independent
-and can land in any order.
+SLAs took an afternoon and turned up two things worth recording. Breach state
+is derived rather than stored, because a stored flag is wrong the moment a
+deadline passes with nothing running — and a *finished* clock has to be judged
+on when it finished, or an incident acknowledged inside its window becomes a
+breach once the window elapses. The second was the reopen-rate denominator:
+dividing by what is closed *now* means a reopened incident vanishes from it
+exactly when the metric matters, so it divides by analyst close actions from the
+audit trail instead.
+
+Presence, comments and notifications are independent and can land in any
+order.
 
 ---
 

@@ -253,6 +253,12 @@ class Incident(Base, TimestampMixin):
     assignee_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), index=True)
     team_id: Mapped[Optional[str]] = mapped_column(ForeignKey("teams.id"), index=True)
     acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    #: When each clock runs out. Breach itself is derived from these plus
+    #: acknowledged_at/closed_at rather than stored, so it cannot go stale.
+    sla_ack_due: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    sla_resolve_due: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    #: Set once when the worker escalates a breach, so it escalates once.
+    sla_escalated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     waiting_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     waiting_reason: Mapped[Optional[str]] = mapped_column(Text)

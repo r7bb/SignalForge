@@ -84,6 +84,7 @@ codebase running against the bundled lab telemetry — see
 | **Enrichment** | Multi-provider threat intel (internal classification, checked-in static feed, optional HTTP feed) with caching, retry/backoff and a circuit breaker |
 | **Case management** | Incidents with a validated state machine (including a `waiting` state with a wake-up timer), dedup, notes, evidence and a full audit trail |
 | **Queues and shifts** | Team queues an incident is *automatically routed to* by rules in git, before anyone claims it; claim/release, transfer with a mandatory reason, per-transition role permissions, optimistic concurrency on every write, and a shift-handover report |
+| **Service levels** | Per-severity acknowledge/resolve clocks from a policy file, derived (never stale) breach state, once-only escalation by the worker, and MTTD/MTTA/MTTR, SLA attainment, queue age and reopen rate per team and analyst |
 | **Response** | Approval-gated playbooks scoped to this deployment's own lab resources, dry-run by default, four-eyes approval |
 | **Supply chain** | CycloneDX/SPDX ingestion, version-range vulnerability matching, "which applications contain it" impact queries |
 | **Multi-tenancy** | Every query is tenant-scoped from the caller's token; cross-tenant reads are 403 |
@@ -505,6 +506,64 @@ That example is a real one. MFA removal is tagged `defense_evasion`, so a
 tactic-only table hands it to whoever owns that tactic — cloud security. The
 detection id is unambiguous, and the preview is how that was diagnosed.
 
+### Service levels and SOC metrics
+
+Every incident runs two clocks from the moment it opens: **acknowledge** (until
+a person claims it) and **resolve** (until it reaches a terminal state). The
+targets are per-severity policy in [schemas/sla.yml](schemas/sla.yml) — in git,
+because they are the numbers a SOC is judged on:
+
+| Severity | Acknowledge | Resolve |
+|---|---|---|
+| critical | 15 min | 4 h |
+| high | 1 h | 8 h |
+| medium | 4 h | 24 h |
+| low | 24 h | 7 d |
+| informational | — | — |
+
+Informational has no targets deliberately: putting a clock on work nobody
+intends to do only manufactures breaches.
+
+**Breach is derived, never stored as a flag.** A stored boolean is wrong the
+moment a deadline passes and nothing has run to update it; computing it from the
+due time against `acknowledged_at`/`closed_at` means the answer is right
+whenever it is asked. A *finished* clock is judged on when it finished, so an
+incident acknowledged inside its window stays "met" forever rather than turning
+into a breach once the window elapses.
+
+The worker sweeps breaches every two minutes and escalates once — bumping
+severity, writing the timeline entry and the audit row. `sla_escalated_at` is
+what makes it idempotent: a tight schedule re-pages nobody.
+
+`GET /stats/soc` is the report:
+
+```
+window: 7 days | opened 12 | closed 4
+MTTD 8.8m     MTTA 15s      MTTR(resolved) 4s
+SLA ack: 2 met of 12 (0.167) | resolve: 12 met of 12
+queues:
+  endpoint         open=3   unclaimed=2   oldest=1.1m
+  identity         open=3   unclaimed=3   oldest=1.1m
+by analyst:
+  dana@acme.test   claimed=2   mtta=15s
+```
+
+Three definitions worth stating, because every SIEM means something slightly
+different:
+
+- **MTTA** is measured from the *first* claim, so passing a case around later
+  does not flatter it.
+- **MTTR** is split by disposition. A false positive closed in two minutes and
+  a real intrusion contained in six hours are not the same achievement and
+  should not average together.
+- **Reopen rate** divides by *analyst closures* from the audit trail, not by
+  what is closed right now. An incident that was closed and then reopened still
+  happened, and an incident the correlator superseded into a chain was never a
+  human deciding it was finished.
+
+**Queue age** — the oldest unclaimed incident per queue — is the one to watch.
+It goes bad before MTTA does.
+
 ### Database migrations
 
 The metadata schema is versioned with Alembic. `alembic upgrade head` runs when
@@ -822,10 +881,9 @@ The incident shown is `Potential Account Compromise`, produced by the
 `account_compromise` scenario: four detections firing across three sources,
 correlated into one case by `sf-corr-0003`.
 
-**What is not pictured:** routing rules (queues are populated by an explicit
-transfer today) and the SOC metrics reporting. Both are named in the roadmap —
-`acknowledged_at` is recorded on first claim, so the MTTA data exists without a
-report to read it.
+**What is not pictured:** the SLA countdown column on the queue and the SOC
+performance panel on the overview, both of which arrived after these captures
+were taken.
 
 ## Roadmap
 

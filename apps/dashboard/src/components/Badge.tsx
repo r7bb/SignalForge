@@ -2,7 +2,8 @@
 
 import type { ReactNode } from "react";
 
-import { riskColor, riskIcon, statusLabel } from "@/lib/format";
+import { humanSeconds, riskColor, riskIcon, statusLabel } from "@/lib/format";
+import type { SlaState } from "@/lib/types";
 
 interface SeverityBadgeProps {
   level: string;
@@ -63,6 +64,45 @@ export function Tag({ children, title }: { children: ReactNode; title?: string }
   return (
     <span className="badge" title={title}>
       {children}
+    </span>
+  );
+}
+
+/**
+ * The SLA countdown on a queue row.
+ *
+ * Shows the *worse* of the two clocks, because that is the one that decides
+ * whether this row needs attention. A met clock is deliberately quiet - the
+ * chip exists to surface trouble, not to congratulate.
+ */
+export function SlaChip({ sla }: { sla?: SlaState | null }) {
+  if (!sla || sla.state === "none") return <span className="muted">-</span>;
+
+  const clock = sla.acknowledge.state === sla.state ? sla.acknowledge : sla.resolve;
+  const label = clock.name === "acknowledge" ? "ack" : "resolve";
+
+  if (sla.state === "breached") {
+    return (
+      <span className="badge" style={{ color: "var(--status-critical)" }}>
+        <span className="badge-dot" style={{ background: "var(--status-critical)" }} />
+        {label} over by {humanSeconds(clock.seconds_over)}
+      </span>
+    );
+  }
+  if (sla.state === "at_risk") {
+    return (
+      <span className="badge" style={{ color: "var(--status-high)" }}>
+        <span className="badge-dot" style={{ background: "var(--status-high)" }} />
+        {label} in {humanSeconds(clock.seconds_remaining)}
+      </span>
+    );
+  }
+  if (sla.state === "met") {
+    return <span className="muted">met</span>;
+  }
+  return (
+    <span className="secondary" style={{ fontSize: 12 }}>
+      {label} in {humanSeconds(clock.seconds_remaining)}
     </span>
   );
 }

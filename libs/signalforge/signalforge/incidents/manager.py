@@ -28,6 +28,7 @@ from ..correlate.engine import CorrelationHit
 from ..correlate.risk import risk_level, score_incident
 from ..models.alert import Alert, AlertStatus
 from ..models.incident import (
+    ACTIVE_STATUSES,
     ALLOWED_TRANSITIONS,
     TEAM_LEAD_TRANSITIONS,
     TERMINAL_STATUSES,
@@ -405,6 +406,7 @@ class IncidentManager:
                     scenario=scenario,
                     reopened=reopen,
                 )
+                self.start_sla_clocks(incident)
                 self.route_new_incident(session, incident, alerts)
                 new_row = dbm.Incident(id=incident.incident_id)
                 _incident_to_row(incident, new_row)
@@ -1073,6 +1075,130 @@ class IncidentManager:
             )
         )
 
+    # ------------------------------------------------------------------ #
+    # Service levels
+    # ------------------------------------------------------------------ #
+    @property
+    def sla(self):
+        """The SLA policy, loaded once per manager."""
+        if getattr(self, "_sla", None) is None:
+            from ..sla import load_policy
+
+            self._sla = load_policy(self.settings.sla_path)
+        return self._sla
+
+    def start_sla_clocks(self, incident: Incident) -> None:
+        """Set both deadlines from the severity at the moment it opens."""
+        ack_due, resolve_due = self.sla.due_times(incident.severity, incident.created_at)
+        incident.sla_ack_due = ack_due
+        incident.sla_resolve_due = resolve_due
+
+    def sla_state(self, incident: Incident, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+        from ..sla import evaluate_incident
+
+        return evaluate_incident(incident, policy=self.sla, now=now)
+
+    def sla_breaches(
+        self, tenant: Optional[str] = None, *, now: Optional[datetime] = None, limit: int = 200
+    ) -> List[Incident]:
+        """Open incidents past either deadline, worst first.
+
+        Filtered in SQL on the stored due times, then confirmed in Python so
+        the definition of "breached" lives in exactly one place.
+        """
+        now = now or datetime.now(tz=timezone.utc)
+        active = [status.value for status in ACTIVE_STATUSES]
+        with self.session_factory() as session:
+            query = select(dbm.Incident).where(
+                dbm.Incident.status.in_(active),
+                (
+                    (dbm.Incident.sla_ack_due.is_not(None))
+                    & (dbm.Incident.sla_ack_due <= now)
+                    & (dbm.Incident.acknowledged_at.is_(None))
+                )
+                | (
+                    (dbm.Incident.sla_resolve_due.is_not(None))
+                    & (dbm.Incident.sla_resolve_due <= now)
+                ),
+            )
+            if tenant:
+                query = query.where(dbm.Incident.tenant == tenant)
+            rows = session.scalars(query.limit(limit)).all()
+
+        breached = [_row_to_incident(row) for row in rows]
+        breached = [item for item in breached if self.sla_state(item, now=now)["breached"]]
+        breached.sort(key=lambda item: item.risk_score, reverse=True)
+        return breached
+
+    def escalate_sla_breach(
+        self, tenant: str, reference: str, *, now: Optional[datetime] = None
+    ) -> Optional[Incident]:
+        """Record a breach once, bumping severity if there is room.
+
+        ``sla_escalated_at`` is what makes this idempotent: the worker runs on a
+        schedule and must not re-page every cycle for the same breach.
+        """
+        now = now or datetime.now(tz=timezone.utc)
+        order = [
+            IncidentSeverity.INFORMATIONAL,
+            IncidentSeverity.LOW,
+            IncidentSeverity.MEDIUM,
+            IncidentSeverity.HIGH,
+            IncidentSeverity.CRITICAL,
+        ]
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            incident = _row_to_incident(row)
+            if incident.sla_escalated_at is not None:
+                return None
+            state = self.sla_state(incident, now=now)
+            if not state["breached"]:
+                return None
+
+            previous = incident.severity
+            index = order.index(incident.severity) if incident.severity in order else 2
+            if index < len(order) - 1:
+                incident.severity = order[index + 1]
+            incident.sla_escalated_at = now
+            incident.version += 1
+            detail = "%s clock breached" % (
+                "acknowledge" if state["acknowledge"]["state"] == "breached" else "resolve"
+            )
+            incident.record(
+                "incident.sla_breached",
+                actor="sla-monitor",
+                detail=detail,
+                from_severity=previous.value,
+                to_severity=incident.severity.value,
+            )
+            incident.timeline.append(
+                TimelineEntry(
+                    time=now,
+                    kind="status",
+                    title="SLA breached - escalated to %s" % incident.severity.value,
+                    detail=detail,
+                    actor="sla-monitor",
+                )
+            )
+            _incident_to_row(incident, row)
+            dbm.record_audit(
+                session,
+                tenant=tenant,
+                actor="sla-monitor",
+                action="incident.sla_breached",
+                entity_type="incident",
+                entity_id=incident.incident_id,
+                detail=detail,
+                from_severity=previous.value,
+                to_severity=incident.severity.value,
+            )
+            session.commit()
+            log.warning(
+                "SLA breach escalated",
+                extra={"incident": incident.key, "tenant": tenant, "detail": detail},
+            )
+            return incident
+
     @property
     def routing(self):
         """The routing table, loaded once per manager."""
@@ -1410,6 +1536,9 @@ def _incident_to_row(incident: Incident, row: dbm.Incident) -> dbm.Incident:
     row.assignee_id = incident.assignee_id
     row.team_id = incident.team_id
     row.acknowledged_at = incident.acknowledged_at
+    row.sla_ack_due = incident.sla_ack_due
+    row.sla_resolve_due = incident.sla_resolve_due
+    row.sla_escalated_at = incident.sla_escalated_at
     row.version = incident.version
     row.waiting_until = incident.waiting_until
     row.waiting_reason = incident.waiting_reason
@@ -1437,6 +1566,9 @@ def _row_to_incident(row: dbm.Incident) -> Incident:
         payload["assignee_id"] = row.assignee_id
         payload["team_id"] = row.team_id
         payload["acknowledged_at"] = _as_utc_optional(row.acknowledged_at)
+        payload["sla_ack_due"] = _as_utc_optional(row.sla_ack_due)
+        payload["sla_resolve_due"] = _as_utc_optional(row.sla_resolve_due)
+        payload["sla_escalated_at"] = _as_utc_optional(row.sla_escalated_at)
         payload["version"] = row.version
         payload["waiting_until"] = _as_utc_optional(row.waiting_until)
         payload["waiting_reason"] = row.waiting_reason
@@ -1455,6 +1587,9 @@ def _row_to_incident(row: dbm.Incident) -> Incident:
         assignee_id=row.assignee_id,
         team_id=row.team_id,
         acknowledged_at=_as_utc_optional(row.acknowledged_at),
+        sla_ack_due=_as_utc_optional(row.sla_ack_due),
+        sla_resolve_due=_as_utc_optional(row.sla_resolve_due),
+        sla_escalated_at=_as_utc_optional(row.sla_escalated_at),
         version=row.version,
         waiting_until=_as_utc_optional(row.waiting_until),
         waiting_reason=row.waiting_reason,

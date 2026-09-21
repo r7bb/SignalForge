@@ -8,13 +8,14 @@ import { BarChart, type BarDatum } from "@/components/BarChart";
 import { RiskMeter } from "@/components/RiskMeter";
 import { StatTile } from "@/components/StatTile";
 import { api, ApiError } from "@/lib/api";
-import { compact, relative } from "@/lib/format";
-import type { IncidentSummary, Overview, TacticCoverage } from "@/lib/types";
+import { compact, humanSeconds, percent, relative } from "@/lib/format";
+import type { IncidentSummary, Overview, SocReport, TacticCoverage } from "@/lib/types";
 
 export default function OverviewPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [tactics, setTactics] = useState<TacticCoverage[]>([]);
   const [incidents, setIncidents] = useState<IncidentSummary[]>([]);
+  const [soc, setSoc] = useState<SocReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -22,15 +23,19 @@ export default function OverviewPage() {
 
     async function load() {
       try {
-        const [overviewData, mitre, openIncidents] = await Promise.all([
+        const [overviewData, mitre, openIncidents, socReport] = await Promise.all([
           api.overview(),
           api.mitre(),
           api.incidents({ open_only: true, limit: 8 }),
+          // Newest addition, and the one most likely to be empty on a fresh
+          // deployment - so a failure here must not blank the whole page.
+          api.socMetrics(7).catch(() => null),
         ]);
         if (cancelled) return;
         setOverview(overviewData);
         setTactics(mitre.tactics);
         setIncidents(openIncidents);
+        setSoc(socReport);
         setError(null);
       } catch (exc) {
         if (!cancelled) {
@@ -192,6 +197,121 @@ export default function OverviewPage() {
           <p className="empty">No alerts yet.</p>
         )}
       </div>
+
+      {soc && soc.incidents_opened > 0 && (
+        <>
+          <h2 className="section-title">
+            SOC performance · last {soc.window_days} days
+          </h2>
+          <div className="grid grid-4">
+            <StatTile
+              label="Mean time to acknowledge"
+              value={humanSeconds(soc.mtta.mean_seconds)}
+              note={
+                soc.mtta.count
+                  ? `p90 ${humanSeconds(soc.mtta.p90_seconds)} · ${soc.mtta.count} claimed`
+                  : "nothing claimed yet"
+              }
+            />
+            <StatTile
+              label="Mean time to resolve"
+              value={humanSeconds(soc.mttr.resolved.mean_seconds)}
+              note={
+                soc.mttr.false_positive.count
+                  ? `false positives ${humanSeconds(soc.mttr.false_positive.mean_seconds)} (counted apart)`
+                  : `${soc.mttr.resolved.count} resolved`
+              }
+            />
+            <StatTile
+              label="Acknowledge SLA met"
+              value={percent(soc.sla.acknowledge.attainment)}
+              accent={
+                (soc.sla.acknowledge.attainment ?? 1) < 0.9
+                  ? "var(--status-serious)"
+                  : undefined
+              }
+              note={`${soc.sla.acknowledge.breached} breached of ${soc.sla.acknowledge.total}`}
+            />
+            <StatTile
+              label="Reopen rate"
+              value={percent(soc.reopen_rate)}
+              accent={(soc.reopen_rate ?? 0) > 0.1 ? "var(--status-serious)" : undefined}
+              note={`${soc.reopened} reopened of ${soc.analyst_closures} closed`}
+            />
+          </div>
+
+          {soc.queues.length > 0 && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <div className="card-head">
+                <h3 className="card-title">Queue age</h3>
+                <span className="card-note">
+                  oldest unclaimed first - the leading indicator
+                </span>
+              </div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Queue</th>
+                    <th className="num">Open</th>
+                    <th className="num">Unclaimed</th>
+                    <th>Oldest unclaimed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {soc.queues.map((queue) => (
+                    <tr key={queue.team}>
+                      <td className="primary">
+                        <Link href="/queues">{queue.name ?? queue.team}</Link>
+                        <div className="muted mono" style={{ fontSize: 11 }}>
+                          {queue.team}
+                        </div>
+                      </td>
+                      <td className="num">{queue.open}</td>
+                      <td className="num">{queue.unclaimed}</td>
+                      <td>{humanSeconds(queue.oldest_unclaimed_seconds)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {soc.by_team.length > 0 && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <div className="card-head">
+                <h3 className="card-title">By team</h3>
+                <span className="card-note">mean, with p90 beside it</span>
+              </div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Team</th>
+                    <th className="num">Claimed</th>
+                    <th>MTTA</th>
+                    <th>MTTR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {soc.by_team.map((team) => (
+                    <tr key={team.team}>
+                      <td className="primary">{team.name ?? team.team}</td>
+                      <td className="num">{team.mtta.count}</td>
+                      <td>
+                        {humanSeconds(team.mtta.mean_seconds)}
+                        <span className="muted" style={{ fontSize: 11 }}>
+                          {" "}
+                          p90 {humanSeconds(team.mtta.p90_seconds)}
+                        </span>
+                      </td>
+                      <td>{humanSeconds(team.mttr.mean_seconds)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
 
       {overview && (overview.supply_chain.open_findings ?? 0) > 0 && (
         <>

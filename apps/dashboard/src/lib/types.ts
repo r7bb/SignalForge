@@ -45,6 +45,8 @@ export interface IncidentSummary {
   team_id?: string | null;
   team_slug?: string | null;
   acknowledged_at?: string | null;
+  sla_ack_due?: string | null;
+  sla_resolve_due?: string | null;
   waiting_until?: string | null;
   waiting_reason?: string | null;
   /** Optimistic-concurrency token: send it back on a mutation. */
@@ -289,6 +291,59 @@ export interface QueueIncident {
   acknowledged_at?: string | null;
   waiting_until?: string | null;
   version: number;
+  sla?: SlaState | null;
+}
+
+export interface SlaClock {
+  name: "acknowledge" | "resolve";
+  due_at?: string | null;
+  completed_at?: string | null;
+  state: "ok" | "at_risk" | "breached" | "met" | "none";
+  seconds_remaining?: number | null;
+  seconds_over?: number | null;
+}
+
+export interface SlaState {
+  state: SlaClock["state"];
+  acknowledge: SlaClock;
+  resolve: SlaClock;
+  breached: boolean;
+}
+
+export interface MetricSummary {
+  count: number;
+  mean_seconds?: number | null;
+  p50_seconds?: number | null;
+  p90_seconds?: number | null;
+}
+
+export interface SlaAttainment {
+  met: number;
+  total: number;
+  breached: number;
+  attainment?: number | null;
+}
+
+export interface SocReport {
+  window_days: number;
+  incidents_opened: number;
+  incidents_closed: number;
+  mttd: MetricSummary;
+  mtta: MetricSummary;
+  mttr: { resolved: MetricSummary; false_positive: MetricSummary; combined: MetricSummary };
+  sla: { acknowledge: SlaAttainment; resolve: SlaAttainment };
+  analyst_closures: number;
+  reopened: number;
+  reopen_rate?: number | null;
+  queues: Array<{
+    team: string;
+    name?: string | null;
+    open: number;
+    unclaimed: number;
+    oldest_unclaimed_seconds?: number | null;
+  }>;
+  by_team: Array<{ team: string; name?: string | null; mtta: MetricSummary; mttr: MetricSummary }>;
+  by_analyst: Array<{ analyst: string; mtta: MetricSummary; mttr: MetricSummary }>;
 }
 
 export interface QueueView {

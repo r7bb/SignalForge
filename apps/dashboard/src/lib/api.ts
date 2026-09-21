@@ -21,6 +21,7 @@ import type {
   Session,
   HandoverReport,
   QueueView,
+  SocReport,
   SupplyChainApp,
   SupplyChainFinding,
   TacticCoverage,
@@ -184,6 +185,9 @@ export const api = {
     request<QueueView>(`/teams/${slug}/queue${unclaimedOnly ? "?unclaimed_only=true" : ""}`),
 
   handover: (slug: string) => request<HandoverReport>(`/teams/${slug}/handover`),
+
+  // -- SOC performance ----------------------------------------------------
+  socMetrics: (days = 7) => request<SocReport>(`/stats/soc?days=${days}`),
 
   assign: (reference: string, owner: string | null) =>
     request<IncidentSummary>(`/incidents/${reference}/assign`, json({ owner })),

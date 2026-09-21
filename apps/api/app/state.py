@@ -17,7 +17,7 @@ from signalforge.config import Settings, get_settings
 from signalforge.correlate import CorrelationEngine
 from signalforge.detect import DetectionEngine
 from signalforge.enrich import ThreatIntelService
-from signalforge.incidents import IncidentManager, TeamService
+from signalforge.incidents import IncidentManager, SocMetrics, TeamService
 from signalforge.pipeline import Pipeline
 from signalforge.response import LabAdapter, ResponseService
 from signalforge.sbom import SbomService
@@ -39,6 +39,7 @@ class AppState:
     auth: AuthService
     incidents: IncidentManager
     teams: TeamService
+    soc_metrics: SocMetrics
     responses: ResponseService
     sbom: SbomService
     intel: ThreatIntelService
@@ -156,6 +157,7 @@ def build_state(settings: Optional[Settings] = None) -> AppState:
     intel = ThreatIntelService(settings)
     incidents = IncidentManager(session_factory, event_store, settings)
     teams = TeamService(session_factory)
+    soc_metrics = SocMetrics(session_factory)
     pipeline = Pipeline(
         ruleset,
         event_store,
@@ -182,6 +184,7 @@ def build_state(settings: Optional[Settings] = None) -> AppState:
         auth=auth,
         incidents=incidents,
         teams=teams,
+        soc_metrics=soc_metrics,
         responses=responses,
         sbom=sbom,
         intel=intel,

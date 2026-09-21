@@ -130,3 +130,42 @@ async def detection_stats(
         "engine": state.pipeline.engine.stats.to_dict(),
         "correlation": state.pipeline.correlator.stats.to_dict(),
     }
+
+
+@router.get("/soc")
+async def soc_performance(
+    days: int = Query(default=7, ge=1, le=90),
+    tenant: str = Depends(tenant_scope),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """MTTD/MTTA/MTTR, SLA attainment, queue age and reopen rate.
+
+    Computed from the timestamps case management already records, so there is
+    no separate instrumentation to keep in step.
+    """
+    return state.soc_metrics.report(tenant, days=days)
+
+
+@router.get("/sla-breaches")
+async def sla_breaches(
+    limit: int = Query(default=50, ge=1, le=200),
+    tenant: str = Depends(tenant_scope),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Open incidents past either deadline, worst risk first."""
+    breached = state.incidents.sla_breaches(tenant, limit=limit)
+    return {
+        "count": len(breached),
+        "incidents": [
+            {
+                "key": incident.key,
+                "title": incident.title,
+                "severity": incident.severity.value,
+                "risk_score": incident.risk_score,
+                "owner": incident.owner,
+                "team_slug": incident.team_slug,
+                "sla": state.incidents.sla_state(incident),
+            }
+            for incident in breached
+        ],
+    }

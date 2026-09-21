@@ -118,6 +118,8 @@ class IncidentSummary(BaseModel):
     team_id: Optional[str] = None
     team_slug: Optional[str] = None
     acknowledged_at: Optional[datetime] = None
+    sla_ack_due: Optional[datetime] = None
+    sla_resolve_due: Optional[datetime] = None
     waiting_until: Optional[datetime] = None
     waiting_reason: Optional[str] = None
     #: Send this back on a mutation to be told about a concurrent edit.

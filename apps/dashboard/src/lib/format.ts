@@ -57,6 +57,22 @@ export function age(fromIso: string): string {
   return `${Math.round(seconds / 86400)}d`;
 }
 
+/** Seconds -> a compact human duration ("7m", "2.4h", "3d"). */
+export function humanSeconds(seconds?: number | null): string {
+  if (seconds === null || seconds === undefined) return "-";
+  const value = Math.max(0, Math.round(seconds));
+  if (value < 60) return `${value}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  if (value < 86400) return `${(value / 3600).toFixed(1)}h`;
+  return `${(value / 86400).toFixed(1)}d`;
+}
+
+/** 0.873 -> "87%" */
+export function percent(fraction?: number | null): string {
+  if (fraction === null || fraction === undefined) return "-";
+  return `${Math.round(fraction * 100)}%`;
+}
+
 /** Risk band -> the reserved status colour (never a series colour). */
 export function riskColor(level: RiskLevel | string): string {
   switch (level) {

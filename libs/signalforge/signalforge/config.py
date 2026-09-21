@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     #: incident unrouted for a human to place.
     routing_enabled: bool = True
 
+    #: Per-severity acknowledge/resolve targets. Missing file -> the built-in
+    #: targets in ``signalforge.sla.BUILTIN_TARGETS``.
+    sla_path: str = "schemas/sla.yml"
+    #: Let the worker escalate an incident whose acknowledge clock has expired
+    #: (bump severity, notify, audit). Off leaves breaches visible but silent.
+    sla_escalation_enabled: bool = True
+
     # --- Correlation / risk ----------------------------------------------
     correlation_window_seconds: int = 900
     incident_dedup_window_seconds: int = 1800

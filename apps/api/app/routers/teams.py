@@ -173,6 +173,7 @@ async def team_queue(
                 "first_seen": incident.first_seen,
                 "acknowledged_at": incident.acknowledged_at,
                 "waiting_until": incident.waiting_until,
+                "sla": state.incidents.sla_state(incident),
                 "version": incident.version,
             }
             for incident in incidents

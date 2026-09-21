@@ -40,6 +40,8 @@ def _summary(incident: Incident) -> Dict[str, Any]:
         "team_id": incident.team_id,
         "team_slug": incident.team_slug,
         "acknowledged_at": incident.acknowledged_at,
+        "sla_ack_due": incident.sla_ack_due,
+        "sla_resolve_due": incident.sla_resolve_due,
         "waiting_until": incident.waiting_until,
         "waiting_reason": incident.waiting_reason,
         "version": incident.version,

@@ -17,7 +17,9 @@ from typing import Any, Dict, Optional
 
 from signalforge.config import get_settings
 from signalforge.enrich import ThreatIntelService
+from signalforge.incidents import IncidentError, IncidentManager
 from signalforge.logging_setup import configure_logging
+from signalforge.models.incident import IncidentStatus
 from signalforge.sbom import SbomService
 from signalforge.sigma import compile_rule, load_ruleset
 from signalforge.storage import db as dbm
@@ -76,6 +78,16 @@ if CELERY_AVAILABLE:
                 "task": "signalforge.prune_indicators",
                 "schedule": crontab(minute=30, hour=3),
             },
+            # Every two minutes: a 15-minute acknowledge target is not much use
+            # if the breach is noticed an hour late.
+            "sweep-sla-breaches": {
+                "task": "signalforge.sweep_sla",
+                "schedule": 120.0,
+            },
+            "wake-parked-incidents": {
+                "task": "signalforge.wake_parked_incidents",
+                "schedule": 300.0,
+            },
         },
     )
 else:  # pragma: no cover
@@ -118,6 +130,58 @@ def sweep_state() -> Dict[str, Any]:
     """
     ruleset = load_ruleset(settings.detections_path)
     return {"rules": len(ruleset.rules), "correlations": len(ruleset.correlations)}
+
+
+@app.task(name="signalforge.sweep_sla", bind=False)
+def sweep_sla(tenant: Optional[str] = None) -> Dict[str, Any]:
+    """Escalate incidents that have blown an SLA clock.
+
+    Escalation is idempotent (``sla_escalated_at``), so running this on a tight
+    schedule re-pages nobody: the first pass records the breach and bumps the
+    severity, later passes find nothing to do.
+    """
+    dbm.init_db(settings)
+    manager = IncidentManager(dbm.get_session_factory(settings), settings=settings)
+    if not settings.sla_escalation_enabled:
+        breaches = manager.sla_breaches(tenant)
+        log.info("SLA sweep (escalation disabled)", extra={"breaches": len(breaches)})
+        return {"breaches": len(breaches), "escalated": 0, "escalation_enabled": False}
+
+    escalated = []
+    for incident in manager.sla_breaches(tenant):
+        if manager.escalate_sla_breach(incident.tenant, incident.key) is not None:
+            escalated.append(incident.key)
+    log.info("SLA sweep", extra={"escalated": len(escalated)})
+    return {"escalated": len(escalated), "incidents": escalated, "escalation_enabled": True}
+
+
+@app.task(name="signalforge.wake_parked_incidents", bind=False)
+def wake_parked_incidents(tenant: Optional[str] = None) -> Dict[str, Any]:
+    """Return parked incidents to the queue once their timer expires.
+
+    A ``waiting`` incident with an elapsed wake-up time is work that has become
+    actionable again and nobody has been told.
+    """
+    dbm.init_db(settings)
+    manager = IncidentManager(dbm.get_session_factory(settings), settings=settings)
+    woken = []
+    for incident in manager.due_for_wake_up(tenant):
+        try:
+            manager.transition(
+                incident.tenant,
+                incident.key,
+                IncidentStatus.INVESTIGATING,
+                actor="sla-monitor",
+                reason="wake-up timer expired (%s)"
+                % (incident.waiting_reason or "no reason given"),
+            )
+            woken.append(incident.key)
+        except IncidentError as exc:  # pragma: no cover - defensive
+            log.warning(
+                "could not wake incident", extra={"incident": incident.key, "error": str(exc)}
+            )
+    log.info("woke parked incidents", extra={"count": len(woken)})
+    return {"woken": len(woken), "incidents": woken}
 
 
 @app.task(name="signalforge.rematch_vulnerabilities", bind=False)

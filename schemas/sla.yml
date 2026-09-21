@@ -1,0 +1,35 @@
+# Service-level targets per incident severity.
+#
+# Two clocks per incident, both started when it opens:
+#
+#   acknowledge - how long until a person takes it (MTTA)
+#   resolve     - how long until it reaches a terminal state (MTTR)
+#
+# These are the numbers a SOC is judged on, so they are policy, kept in git and
+# reviewable, rather than constants buried in the scoring code.
+#
+# "warn_at" is the fraction of the window after which the dashboard shows the
+# countdown as at-risk: 0.75 means amber with a quarter of the time left.
+#
+# Informational incidents have no targets on purpose. Putting a clock on
+# something nobody intends to work just manufactures breaches.
+
+defaults:
+  warn_at: 0.75
+
+targets:
+  critical:
+    acknowledge_minutes: 15
+    resolve_minutes: 240
+  high:
+    acknowledge_minutes: 60
+    resolve_minutes: 480
+  medium:
+    acknowledge_minutes: 240
+    resolve_minutes: 1440
+  low:
+    acknowledge_minutes: 1440
+    resolve_minutes: 10080
+  informational:
+    acknowledge_minutes: null
+    resolve_minutes: null

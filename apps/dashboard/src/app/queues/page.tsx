@@ -12,10 +12,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { SeverityBadge, StatusBadge, Tag } from "@/components/Badge";
+import { SeverityBadge, SlaChip, StatusBadge, Tag } from "@/components/Badge";
 import { api, ApiError, loadSession } from "@/lib/api";
 import { age, relative } from "@/lib/format";
-import type { HandoverReport, QueueIncident, Team } from "@/lib/types";
+import type { HandoverReport, QueueIncident, SlaClock, SlaState, Team } from "@/lib/types";
 
 type Scope = "mine" | "unclaimed" | "open";
 
@@ -78,6 +78,9 @@ export default function QueuesPage() {
         acknowledged_at: incident.acknowledged_at,
         waiting_until: incident.waiting_until,
         version: incident.version,
+        // The list endpoint returns the due dates; the queue endpoint returns
+        // the evaluated clocks. Derive here so both paths render the chip.
+        sla: slaFromDueDates(incident),
       })),
     );
   }, [team, scope, email]);
@@ -292,7 +295,7 @@ export default function QueuesPage() {
                 <th>Severity</th>
                 <th className="num">Risk</th>
                 <th>Owner</th>
-                <th>Waiting for</th>
+                <th>SLA</th>
                 <th>Age</th>
                 <th />
               </tr>
@@ -327,8 +330,14 @@ export default function QueuesPage() {
                         <span className="muted">unclaimed</span>
                       )}
                     </td>
-                    <td className="secondary" style={{ fontSize: 12 }}>
-                      {row.waiting_until ? `until ${relative(row.waiting_until)}` : "-"}
+                    <td>
+                      {row.waiting_until ? (
+                        <span className="secondary" style={{ fontSize: 12 }}>
+                          parked until {relative(row.waiting_until)}
+                        </span>
+                      ) : (
+                        <SlaChip sla={row.sla} />
+                      )}
                     </td>
                     <td title={row.first_seen}>{age(row.first_seen)}</td>
                     <td>
@@ -363,4 +372,58 @@ export default function QueuesPage() {
       </div>
     </>
   );
+}
+
+/**
+ * Evaluate the clocks client-side for the unscoped list, which returns the due
+ * dates rather than the evaluated state. Same rules as the server: a finished
+ * clock is judged on when it finished, and the worse clock wins.
+ */
+function slaFromDueDates(
+  incident: {
+    sla_ack_due?: string | null;
+    sla_resolve_due?: string | null;
+    acknowledged_at?: string | null;
+    status: string;
+  },
+): SlaState | null {
+  const now = Date.now();
+  const closed = incident.status === "resolved" || incident.status === "closed_false_positive";
+
+  const clock = (
+    name: SlaClock["name"],
+    due?: string | null,
+    completed?: string | null,
+  ): SlaClock => {
+    if (!due) return { name, state: "none" };
+    const dueMs = new Date(due).getTime();
+    if (completed) {
+      const doneMs = new Date(completed).getTime();
+      return doneMs <= dueMs
+        ? { name, due_at: due, completed_at: completed, state: "met" }
+        : {
+            name, due_at: due, completed_at: completed, state: "breached",
+            seconds_over: Math.round((doneMs - dueMs) / 1000),
+          };
+    }
+    if (now > dueMs) {
+      return { name, due_at: due, state: "breached", seconds_over: Math.round((now - dueMs) / 1000) };
+    }
+    return { name, due_at: due, state: "ok", seconds_remaining: Math.round((dueMs - now) / 1000) };
+  };
+
+  const acknowledge = clock("acknowledge", incident.sla_ack_due, incident.acknowledged_at);
+  const resolve = clock("resolve", incident.sla_resolve_due, closed ? new Date().toISOString() : null);
+  if (acknowledge.state === "none" && resolve.state === "none") return null;
+
+  const rank: Record<SlaClock["state"], number> = {
+    breached: 3, at_risk: 2, ok: 1, met: 0, none: -1,
+  };
+  const worst = rank[acknowledge.state] >= rank[resolve.state] ? acknowledge : resolve;
+  return {
+    state: worst.state,
+    acknowledge,
+    resolve,
+    breached: acknowledge.state === "breached" || resolve.state === "breached",
+  };
 }
