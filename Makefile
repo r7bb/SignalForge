@@ -81,9 +81,9 @@ lint: ## Ruff (as CI runs it) + mypy
 	# CI runs this too, and a missing --check here is how a formatting-only
 	# failure reaches the build after `ruff check` has already passed.
 	$(BIN)/ruff format --check libs services apps/api tests scripts
-	# Advisory: the CI step is continue-on-error and there is a standing
-	# backlog of ~90 findings in the older modules. See the roadmap.
-	$(BIN)/mypy libs/signalforge/signalforge apps/api/app || true
+	# Blocking, same as CI. The `|| true` that used to be here hid a
+	# 90-error backlog for as long as nobody looked.
+	$(BIN)/mypy libs/signalforge/signalforge apps/api/app
 
 .PHONY: format
 format: ## Apply ruff formatting

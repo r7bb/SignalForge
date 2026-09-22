@@ -58,9 +58,11 @@ jobs:
         run: |
           ruff check libs services apps/api tests scripts
           ruff format --check libs services apps/api tests scripts
+      # A real gate now the backlog is cleared. If this fails, fix the types
+      # rather than restoring continue-on-error: an advisory type checker is
+      # one nobody reads.
       - name: Type check
         run: mypy libs/signalforge/signalforge apps/api/app
-        continue-on-error: true
       - name: Unit and integration tests
         run: pytest tests/unit tests/integration tests/detections -q --cov --cov-report=xml
       - name: End-to-end API tests

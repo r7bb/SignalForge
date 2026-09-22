@@ -330,6 +330,36 @@ class IncidentWatcher(Base, TimestampMixin):
     reason: Mapped[str] = mapped_column(String(32), default="manual")
 
 
+class IncidentLink(Base):
+    """An edge between two incidents.
+
+    Stored once, in the direction the analyst asserted it, and read from both
+    ends - so a symmetric ``related_to`` does not need two rows, and a
+    directional one cannot disagree with itself.
+    """
+
+    __tablename__ = "incident_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_incident_id",
+            "target_incident_id",
+            "relationship",
+            name="uq_incident_links_edge",
+        ),
+        Index("ix_incident_links_target", "target_incident_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    tenant: Mapped[str] = mapped_column(String(64), index=True)
+    source_incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id"), index=True)
+    target_incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id"))
+    #: related_to | duplicate_of | caused_by
+    relationship: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[Optional[str]] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(255), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Notification(Base, TimestampMixin):
     """A queued notification and its delivery state.
 
@@ -679,7 +709,8 @@ def next_incident_key(session: Session, tenant: str) -> str:
     """Allocate the next ``INC-####`` key for a tenant (row-locked)."""
     # SQLite has no row locks; PostgreSQL takes one so two correlators cannot
     # allocate the same incident key.
-    lockable = bool(session.bind) and session.bind.dialect.name != "sqlite"
+    bind = session.bind
+    lockable = bind is not None and bind.dialect.name != "sqlite"
     row = session.get(IncidentSequence, tenant, with_for_update=lockable)
     if row is None:
         row = IncidentSequence(tenant=tenant, last_value=2000)

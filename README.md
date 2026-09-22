@@ -85,7 +85,7 @@ codebase running against the bundled lab telemetry — see
 | **Case management** | Incidents with a validated state machine (including a `waiting` state with a wake-up timer), dedup, notes, evidence and a full audit trail |
 | **Queues and shifts** | Team queues an incident is *automatically routed to* by rules in git, before anyone claims it; claim/release, transfer with a mandatory reason, per-transition role permissions, optimistic concurrency on every write, and a shift-handover report |
 | **Notifications** | Pluggable channels (log, generic webhook, Slack) driven off incident events, persisted before delivery, retried with backoff, and never sent to the person who caused the event |
-| **Collaboration** | Threaded comments with `@mention` resolution, a watch list that records why each person is on it, and mention-driven watching that never implies ownership |
+| **Collaboration** | Threaded comments with `@mention` resolution, a watch list that records why each person is on it, mention-driven watching that never implies ownership, case linking with per-direction semantics, evidence-moving merges, and live presence |
 | **Service levels** | Per-severity acknowledge/resolve clocks from a policy file, derived (never stale) breach state, once-only escalation by the worker, and MTTD/MTTA/MTTR, SLA attainment, queue age and reopen rate per team and analyst |
 | **Response** | Approval-gated playbooks scoped to this deployment's own lab resources, dry-run by default, four-eyes approval |
 | **Supply chain** | CycloneDX/SPDX ingestion, version-range vulnerability matching, "which applications contain it" impact queries |
@@ -118,6 +118,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e "libs/signalforge[dev]" "fastapi>=0.115" "uvicorn[standard]" python-multipart
 
 pytest                                             # the full test suite
+make lint                                          # ruff + ruff format --check + mypy
 python scripts/validate_rules.py detections        # the detection linter
 python scripts/demo.py                             # end-to-end walkthrough in the terminal
 
@@ -507,6 +508,44 @@ curl -X POST localhost:8000/api/v1/routing/preview \
 That example is a real one. MFA removal is tagged `defense_evasion`, so a
 tactic-only table hands it to whoever owns that tactic — cloud security. The
 detection id is unambiguous, and the preview is how that was diagnosed.
+
+### Linking and merging cases
+
+One intrusion should be one case. Three relationships, each with its own
+directionality because conflating them loses what makes a link useful:
+
+| Relationship | Reads from the other end as |
+|---|---|
+| `related_to` | `related_to` — symmetric, so it is stored once |
+| `duplicate_of` | `duplicated_by` |
+| `caused_by` | `led_to` |
+
+A directional link gets an inverse *label* rather than the same word pointing
+backwards, and a symmetric one is a single row presented from both sides — so
+linking A to B and then B to A does not show the incident related to its
+partner twice.
+
+**A merge moves evidence, it does not copy it.** The duplicate's alerts are
+repointed at the survivor, so afterwards every alert belongs to exactly one
+incident and no count can double. The survivor inherits the union of events,
+entities, addresses, hosts, tactics and techniques, the wider time span, and
+the worse of the two risk scores. The duplicate closes with a `duplicate_of`
+link recording where it went, which is what makes the merge explainable later.
+
+Merging an already-closed incident is refused: closing it was a decision
+somebody made, and a merge must not bury it.
+
+### Who else is looking at this
+
+Optimistic concurrency stops a stale write, but only *after* the analyst has
+typed. Presence is the cheap preventative half — `POST
+/incidents/{ref}/presence` is a heartbeat that returns who *else* is viewing.
+
+Deliberately not in the database: presence is worthless thirty seconds later,
+so it lives in Redis when configured and in-process otherwise, with a 30-second
+TTL. A row per heartbeat would turn a cosmetic feature into write load on the
+incident table. If Redis is unreachable it falls back to in-process rather than
+failing — presence must never stop the API serving incidents.
 
 ### Discussion and watchers
 
@@ -942,9 +981,11 @@ The incident shown is `Potential Account Compromise`, produced by the
 `account_compromise` scenario: four detections firing across three sources,
 correlated into one case by `sf-corr-0003`.
 
-**What is not pictured:** the SLA countdown column on the queue and the SOC
-performance panel on the overview, both of which arrived after these captures
-were taken.
+**What is not pictured:** the SLA countdown column on the queue, the SOC
+performance panel on the overview, and the comment thread — all of which
+arrived after these captures were taken. Case linking, merging and presence
+have no dashboard surface at all yet: they are API-only, and the roadmap says
+so.
 
 ## Roadmap
 

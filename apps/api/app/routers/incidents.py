@@ -11,7 +11,13 @@ from signalforge.correlate.risk import risk_level
 from signalforge.models.incident import ALLOWED_TRANSITIONS, Incident, IncidentStatus
 from signalforge.response import list_playbooks, suggest_target
 
-from ..deps import get_state, require_analyst, require_viewer, tenant_scope
+from ..deps import (
+    get_state,
+    require_analyst,
+    require_responder,
+    require_viewer,
+    tenant_scope,
+)
 from ..routers.alerts import _summary as alert_summary
 from ..schemas import (
     AssignRequest,
@@ -19,6 +25,8 @@ from ..schemas import (
     CommentRequest,
     IncidentDetail,
     IncidentSummary,
+    LinkRequest,
+    MergeRequest,
     NoteRequest,
     TransferRequest,
     TransitionRequest,
@@ -305,6 +313,106 @@ async def assign(
 ) -> Dict[str, Any]:
     _require(state, principal.tenant, reference)
     incident = state.incidents.assign(principal.tenant, reference, payload.owner, principal.email)
+    return _summary(incident)
+
+
+@router.post("/{reference}/presence")
+async def announce_presence(
+    reference: str,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Heartbeat "I am looking at this", and get back who else is.
+
+    The caller is excluded from the response: the point is who *else* is here.
+    """
+    _require(state, principal.tenant, reference)
+    state.presence.announce(
+        principal.tenant, reference, email=principal.email, user_id=principal.user_id
+    )
+    viewers = state.presence.viewers(principal.tenant, reference, exclude=principal.email)
+    return {
+        "backend": state.presence.backend,
+        "viewers": [viewer.to_dict() for viewer in viewers],
+    }
+
+
+@router.delete("/{reference}/presence")
+async def clear_presence(
+    reference: str,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Leave immediately rather than waiting for the heartbeat to expire."""
+    state.presence.leave(principal.tenant, reference, email=principal.email)
+    return {"left": True}
+
+
+@router.get("/{reference}/links")
+async def list_links(
+    reference: str,
+    tenant: str = Depends(tenant_scope),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Related incidents, each read from this incident's side."""
+    _require(state, tenant, reference)
+    links = state.incidents.links(tenant, reference)
+    return {"count": len(links), "links": links}
+
+
+@router.post("/{reference}/links", status_code=201)
+async def add_link(
+    reference: str,
+    payload: LinkRequest,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    from signalforge.models.link import LinkRelationship
+
+    _require(state, principal.tenant, reference)
+    links = state.incidents.link(
+        principal.tenant,
+        reference,
+        payload.incident,
+        LinkRelationship(payload.relationship),
+        actor=principal.email,
+        reason=payload.reason,
+    )
+    return {"count": len(links), "links": links}
+
+
+@router.delete("/{reference}/links/{other}")
+async def remove_link(
+    reference: str,
+    other: str,
+    principal: Principal = Depends(require_analyst),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    _require(state, principal.tenant, reference)
+    links = state.incidents.unlink(principal.tenant, reference, other, actor=principal.email)
+    return {"count": len(links), "links": links}
+
+
+@router.post("/{reference}/merge", response_model=IncidentSummary)
+async def merge_incident(
+    reference: str,
+    payload: MergeRequest,
+    principal: Principal = Depends(require_responder),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    """Fold another incident into this one.
+
+    Needs the responder role: a merge moves evidence between cases and closes
+    one of them, which is harder to unpick than a transfer.
+    """
+    _require(state, principal.tenant, reference)
+    incident = state.incidents.merge(
+        principal.tenant,
+        keep=reference,
+        merge=payload.incident,
+        actor=principal.email,
+        reason=payload.reason,
+    )
     return _summary(incident)
 
 

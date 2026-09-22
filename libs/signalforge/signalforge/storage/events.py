@@ -255,7 +255,7 @@ class InMemoryEventStore(EventStore):
         return result
 
     # -- reads -------------------------------------------------------------
-    def _all(self, tenant: Optional[str]) -> Optional[List[OcsfEvent]]:
+    def _all(self, tenant: Optional[str]) -> List[OcsfEvent]:
         with self._lock:
             return [
                 event

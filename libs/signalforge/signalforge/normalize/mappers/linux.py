@@ -349,7 +349,7 @@ class LinuxMapper(Mapper):
                     process=Process(
                         name=str(payload.get("exe") or payload.get("comm") or ""),
                         cmd_line=str(payload.get("cmdline") or message),
-                        pid=int(payload["pid"])
+                        pid=int(str(payload["pid"]))
                         if str(payload.get("pid") or "").isdigit()
                         else None,
                     ),
@@ -364,7 +364,7 @@ class LinuxMapper(Mapper):
             )
             return OcsfEvent(
                 class_uid=ClassUid.FILE_SYSTEM_ACTIVITY,
-                activity_id=int(payload.get("activity_id") or 2),  # default Read
+                activity_id=int(str(payload.get("activity_id") or 2)),  # default Read
                 status_id=StatusId.SUCCESS,
                 severity_id=SeverityId.MEDIUM if sensitive else SeverityId.INFORMATIONAL,
                 actor=Actor(user=actor_user),

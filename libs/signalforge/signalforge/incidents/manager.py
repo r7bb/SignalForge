@@ -43,7 +43,8 @@ from ..models.ocsf import OcsfEvent
 from ..storage import db as dbm
 from ..storage.events import EventStore
 
-if TYPE_CHECKING:  # import cycle at runtime; only needed for the annotation
+if TYPE_CHECKING:  # import cycle at runtime; only needed for the annotations
+    from ..models.link import LinkRelationship
     from .mentions import MentionResult
 
 log = logging.getLogger("signalforge.incidents")
@@ -1335,6 +1336,281 @@ class IncidentManager:
         return self._teams
 
     # ------------------------------------------------------------------ #
+    # Case linking and merging
+    # ------------------------------------------------------------------ #
+    def link(
+        self,
+        tenant: str,
+        reference: str,
+        other: str,
+        relationship: LinkRelationship,
+        *,
+        actor: str = "system",
+        reason: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Assert a relationship between two incidents."""
+        from ..models.link import LinkRelationship as Rel
+        from ..models.link import is_symmetric
+
+        relationship = Rel(relationship)
+        with self.session_factory() as session:
+            source = self._require(session, tenant, reference)
+            target = self._find(session, tenant, other)
+            if target is None:
+                raise IncidentError("unknown incident %r" % other)
+            if source.id == target.id:
+                raise IncidentError("an incident cannot be linked to itself")
+
+            # A symmetric link already recorded from the other side is the same
+            # edge; storing it twice would show the incident linked to its
+            # partner twice.
+            existing = session.scalars(
+                select(dbm.IncidentLink).where(
+                    dbm.IncidentLink.relationship == relationship.value,
+                    (
+                        (dbm.IncidentLink.source_incident_id == source.id)
+                        & (dbm.IncidentLink.target_incident_id == target.id)
+                    )
+                    | (
+                        (dbm.IncidentLink.source_incident_id == target.id)
+                        & (dbm.IncidentLink.target_incident_id == source.id)
+                        if is_symmetric(relationship)
+                        else False
+                    ),
+                )
+            ).first()
+            if existing is None:
+                session.add(
+                    dbm.IncidentLink(
+                        tenant=tenant,
+                        source_incident_id=source.id,
+                        target_incident_id=target.id,
+                        relationship=relationship.value,
+                        reason=reason,
+                        created_by=actor,
+                    )
+                )
+                dbm.record_audit(
+                    session,
+                    tenant=tenant,
+                    actor=actor,
+                    action="incident.linked",
+                    entity_type="incident",
+                    entity_id=source.id,
+                    detail=reason,
+                    relationship=relationship.value,
+                    other=target.key,
+                )
+                session.commit()
+        return self.links(tenant, reference)
+
+    def unlink(
+        self, tenant: str, reference: str, other: str, *, actor: str = "system"
+    ) -> List[Dict[str, Any]]:
+        """Remove every edge between two incidents, in either direction."""
+        with self.session_factory() as session:
+            source = self._require(session, tenant, reference)
+            target = self._find(session, tenant, other)
+            if target is None:
+                raise IncidentError("unknown incident %r" % other)
+            rows = session.scalars(
+                select(dbm.IncidentLink).where(
+                    (
+                        (dbm.IncidentLink.source_incident_id == source.id)
+                        & (dbm.IncidentLink.target_incident_id == target.id)
+                    )
+                    | (
+                        (dbm.IncidentLink.source_incident_id == target.id)
+                        & (dbm.IncidentLink.target_incident_id == source.id)
+                    )
+                )
+            ).all()
+            for row in rows:
+                session.delete(row)
+            if rows:
+                dbm.record_audit(
+                    session,
+                    tenant=tenant,
+                    actor=actor,
+                    action="incident.unlinked",
+                    entity_type="incident",
+                    entity_id=source.id,
+                    other=target.key,
+                )
+                session.commit()
+        return self.links(tenant, reference)
+
+    def links(self, tenant: str, reference: str) -> List[Dict[str, Any]]:
+        """Every edge touching this incident, read from its own side."""
+        from ..models.link import LinkRelationship as Rel
+        from ..models.link import inverse_label
+
+        with self.session_factory() as session:
+            row = self._require(session, tenant, reference)
+            outgoing = session.execute(
+                select(dbm.IncidentLink, dbm.Incident)
+                .join(dbm.Incident, dbm.Incident.id == dbm.IncidentLink.target_incident_id)
+                .where(dbm.IncidentLink.source_incident_id == row.id)
+            ).all()
+            incoming = session.execute(
+                select(dbm.IncidentLink, dbm.Incident)
+                .join(dbm.Incident, dbm.Incident.id == dbm.IncidentLink.source_incident_id)
+                .where(dbm.IncidentLink.target_incident_id == row.id)
+            ).all()
+
+            result: List[Dict[str, Any]] = []
+            for link, other in outgoing:
+                result.append(
+                    {
+                        "id": link.id,
+                        "other_key": other.key,
+                        "other_title": other.title,
+                        "other_status": other.status,
+                        "relationship": link.relationship,
+                        "reason": link.reason,
+                        "created_by": link.created_by,
+                        "created_at": _as_utc(link.created_at),
+                        "outgoing": True,
+                    }
+                )
+            for link, other in incoming:
+                result.append(
+                    {
+                        "id": link.id,
+                        "other_key": other.key,
+                        "other_title": other.title,
+                        "other_status": other.status,
+                        # Read from this end: the target of a duplicate_of is
+                        # "duplicated_by", not a backwards "duplicate_of".
+                        "relationship": inverse_label(Rel(link.relationship)),
+                        "reason": link.reason,
+                        "created_by": link.created_by,
+                        "created_at": _as_utc(link.created_at),
+                        "outgoing": False,
+                    }
+                )
+            result.sort(key=lambda item: item["created_at"])
+            return result
+
+    def merge(
+        self,
+        tenant: str,
+        *,
+        keep: str,
+        merge: str,
+        actor: str,
+        reason: Optional[str] = None,
+    ) -> Incident:
+        """Fold one incident into another. One intrusion should be one case.
+
+        Evidence moves rather than being copied: the alerts are repointed at
+        the surviving incident, so there is exactly one row per alert and the
+        counts cannot double. The duplicate is closed with a ``duplicate_of``
+        link recording where it went, which is what makes the merge
+        explainable afterwards.
+        """
+        if keep == merge:
+            raise IncidentError("cannot merge an incident into itself")
+
+        with self.session_factory() as session:
+            survivor_row = self._require(session, tenant, keep)
+            duplicate_row = self._require(session, tenant, merge)
+            if survivor_row.id == duplicate_row.id:
+                raise IncidentError("cannot merge an incident into itself")
+            if duplicate_row.status in {
+                IncidentStatus.RESOLVED.value,
+                IncidentStatus.CLOSED_FALSE_POSITIVE.value,
+            }:
+                raise IncidentError(
+                    "%s is already closed; merging it would hide a decision somebody made"
+                    % duplicate_row.key
+                )
+
+            survivor = _row_to_incident(survivor_row)
+            duplicate = _row_to_incident(duplicate_row)
+
+            # Move the alerts. This is the whole point of a merge: after it,
+            # every piece of evidence belongs to exactly one incident.
+            moved = session.scalars(
+                select(dbm.Alert).where(dbm.Alert.incident_id == duplicate_row.id)
+            ).all()
+            for alert_row in moved:
+                alert_row.incident_id = survivor_row.id
+
+            survivor.alert_ids = _distinct(survivor.alert_ids + duplicate.alert_ids)
+            survivor.event_ids = _distinct(survivor.event_ids + duplicate.event_ids)
+            survivor.entity_keys = _distinct(survivor.entity_keys + duplicate.entity_keys)
+            survivor.source_ips = _distinct(survivor.source_ips + duplicate.source_ips)
+            survivor.hostnames = _distinct(survivor.hostnames + duplicate.hostnames)
+            survivor.tactics = sort_tactics(survivor.tactics + duplicate.tactics)
+            survivor.techniques = _distinct(survivor.techniques + duplicate.techniques)
+            survivor.first_seen = min(survivor.first_seen, duplicate.first_seen)
+            survivor.last_seen = max(survivor.last_seen, duplicate.last_seen)
+            # The merged case is at least as bad as its worst part.
+            if duplicate.risk_score > survivor.risk_score:
+                survivor.risk_score = duplicate.risk_score
+                survivor.severity = _severity_for_risk(duplicate.risk_score)
+            survivor.version += 1
+            detail = reason or "merged %s into %s" % (duplicate.key, survivor.key)
+            survivor.record(
+                "incident.merged",
+                actor=actor,
+                detail=detail,
+                merged=duplicate.key,
+                alerts_moved=len(moved),
+            )
+            survivor.timeline.append(
+                TimelineEntry(
+                    time=datetime.now(tz=timezone.utc),
+                    kind="status",
+                    title="merged %s into this incident" % duplicate.key,
+                    detail=detail,
+                    actor=actor,
+                )
+            )
+            _incident_to_row(survivor, survivor_row)
+
+            duplicate.status = IncidentStatus.RESOLVED
+            duplicate.closed_at = datetime.now(tz=timezone.utc)
+            duplicate.close_reason = "Merged into %s" % survivor.key
+            duplicate.version += 1
+            duplicate.record("incident.merged_away", actor=actor, detail=duplicate.close_reason)
+            _incident_to_row(duplicate, duplicate_row)
+
+            session.add(
+                dbm.IncidentLink(
+                    tenant=tenant,
+                    source_incident_id=duplicate_row.id,
+                    target_incident_id=survivor_row.id,
+                    relationship="duplicate_of",
+                    reason=detail,
+                    created_by=actor,
+                )
+            )
+            for entity_id, action in (
+                (survivor_row.id, "incident.merged"),
+                (duplicate_row.id, "incident.merged_away"),
+            ):
+                dbm.record_audit(
+                    session,
+                    tenant=tenant,
+                    actor=actor,
+                    action=action,
+                    entity_type="incident",
+                    entity_id=entity_id,
+                    detail=detail,
+                    survivor=survivor.key,
+                    merged=duplicate.key,
+                    alerts_moved=len(moved),
+                )
+            session.commit()
+            log.info(
+                "incidents merged",
+                extra={"survivor": survivor.key, "merged": duplicate.key, "alerts": len(moved)},
+            )
+            return _row_to_incident(survivor_row)
+
+    # ------------------------------------------------------------------ #
     # Collaboration: comments, mentions, watchers
     # ------------------------------------------------------------------ #
     def tenant_emails(self, session: Session, tenant: str) -> List[str]:
@@ -1929,7 +2205,14 @@ def _merge_entity_keys(alerts: Sequence[Alert]) -> List[str]:
     return out
 
 
-def _distinct(values: Optional[Iterable[str]]) -> Optional[List[str]]:
+def _distinct(values: Iterable[Optional[str]]) -> List[str]:
+    """Order-preserving de-duplication, dropping empties.
+
+    The signature used to claim it accepted ``None`` (it would raise) and could
+    return ``None`` (it never does). It takes an iterable that may *yield*
+    None - which is what the call sites actually pass - and always returns a
+    list.
+    """
     out: List[str] = []
     for value in values:
         if value and value not in out:

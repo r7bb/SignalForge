@@ -8,6 +8,7 @@ from .manager import (
     IncidentPermissionError,
 )
 from .metrics import SocMetrics
+from .presence import PresenceTracker, Viewer
 from .teams import TeamError, TeamService
 
 __all__ = [
@@ -16,7 +17,9 @@ __all__ = [
     "IncidentError",
     "IncidentManager",
     "IncidentPermissionError",
+    "PresenceTracker",
     "SocMetrics",
     "TeamError",
     "TeamService",
+    "Viewer",
 ]

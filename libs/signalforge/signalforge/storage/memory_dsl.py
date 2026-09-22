@@ -237,7 +237,7 @@ def _bucket_selector(selector: Dict[str, Any], bucket: Dict[str, Any]) -> bool:
     if not match:
         return True
     param, operator, threshold = match.group(1), match.group(2), float(match.group(3))
-    path = (selector.get("buckets_path") or {}).get(param, param)
+    path = str((selector.get("buckets_path") or {}).get(param, param) or param)
     value = bucket.get(path)
     if isinstance(value, dict):
         value = value.get("value")
@@ -270,7 +270,9 @@ def _spec(spec: Any) -> Any:
     return spec, False
 
 
-def _values(flat: Dict[str, Any], field: Optional[str]) -> Optional[List[Any]]:
+def _values(flat: Dict[str, Any], field: Optional[str]) -> List[Any]:
+    """Every value at ``field``, as a list. Never ``None``: a missing field is
+    an empty list, which is what the callers iterate over."""
     if not field or field not in flat:
         return []
     value = flat[field]

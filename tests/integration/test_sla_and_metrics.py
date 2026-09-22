@@ -131,7 +131,10 @@ def test_an_unclaimed_incident_breaches_once_its_clock_expires(incidents) -> Non
 def test_breaches_are_listed_worst_risk_first(incidents) -> None:
     low = open_incident(incidents, risk=72, dedup="low-risk", rule_level="high", risk_level="high")
     high = open_incident(incidents, risk=98, dedup="high-risk")
-    later = BASE + timedelta(days=1)
+    # Anchored to the incident's own created_at, never to BASE: the clocks
+    # start at the real current time, so "BASE + a day" is in the past for
+    # anything run after midday and no deadline appears to have expired.
+    later = max(low.created_at, high.created_at) + timedelta(days=1)
 
     breaches = incidents.sla_breaches(TENANT, now=later)
     keys = [item.key for item in breaches]
@@ -276,9 +279,10 @@ def test_sla_attainment_is_reported(incidents, metrics, users) -> None:
     dana = dana_id(users)
     met = open_incident(incidents, dedup="met")
     incidents.claim(TENANT, met.key, user_id=dana, email="dana@acme.test")
-    open_incident(incidents, dedup="missed")  # never claimed
+    missed = open_incident(incidents, dedup="missed")  # never claimed
 
-    now = BASE + timedelta(days=1)
+    # Past both acknowledge deadlines, measured from when they actually opened.
+    now = max(met.created_at, missed.created_at) + timedelta(days=1)
     report = metrics.report(TENANT, days=7, now=now)
     acknowledge = report["sla"]["acknowledge"]
     assert acknowledge["total"] == 2

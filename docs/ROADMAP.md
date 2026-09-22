@@ -83,7 +83,7 @@ authentication event all the way through, then widen.
 
 ---
 
-## Phase 7 — multi-analyst operations (in progress)
+## Phase 7 — multi-analyst operations (done / partial)
 
 SignalForge started as a single-analyst tool: an incident had one free-text
 `owner`, and anyone with the `analyst` role could move it through the state
@@ -95,8 +95,11 @@ accountable.
 The queue mechanics, the permission model, automatic routing, service-level
 clocks, the SOC metrics and the analyst UI are all in place (see *Delivered so
 far*), built on what was already there: the state machine, the audit trail and
-the tenancy model. What remains is presence and manual case linking — the
-last two items in the phase.
+the tenancy model. The mechanics are complete: an incident is routed to a
+queue, claimed by a person, discussed, escalated on a clock, linked or merged
+with its neighbours, and closed by somebody accountable — every step audited.
+Three of the later pieces are **API-only**, with no dashboard surface yet; they
+are named under *What is left* rather than counted as finished.
 
 ### Delivered so far
 
@@ -116,26 +119,30 @@ last two items in the phase.
 | Threaded comments and mentions | **done** - replies nest under their parent, `@handle` resolves on local part or full address, ambiguity reported rather than guessed, unresolved handles returned to the author |
 | Watchers | **done** - separate from assignment, records why each person is watching, mention-driven watch never implies ownership |
 | Notification channels | **done** - log/webhook/Slack, driven off mention, transfer and SLA-breach events; persisted before delivery, 0/1/5/30-minute retry then give up, never sent to the actor; `GET /stats/notifications` is the delivery log |
-| Presence | **planned** - optimistic concurrency reports a collision; presence would prevent it |
-| Case linking and merging | **planned** - supersession already models the automated path |
+| Presence | **partial** - tracker and heartbeat endpoint done (30s TTL, Redis when configured, falls back rather than failing); nothing in the dashboard calls it yet |
+| Case linking and merging | **partial** - three relationships with per-direction labels, symmetric links stored once, merges that move evidence rather than copying it, refusal to merge an already-closed case; **API-only, no UI** |
 | Dashboard queue UI | **done** - `/queues` with team depth, scope switcher (My work / Unclaimed / All open), oldest-first ordering and per-row claim; claim/release, park-with-timer and transfer-with-reason on the incident page; the shift-handover report |
 | Concurrent-edit UX | **done** - a stale write surfaces the conflict and reloads the page rather than failing silently |
 
 ### What is left
 
-**1. Presence and collision warnings.** Optimistic concurrency stops a stale
-write and the UI now explains it, but only *after* the analyst has acted. A
-short-lived presence key (Redis, ~30s TTL) driving "Dana is viewing this"
-prevents the collision rather than reporting it.
+The mechanics are complete. What is **not** built is the dashboard surface for
+the last three pieces:
 
-**2. Case linking and merging.** Two incidents that turn out to be one intrusion
-should become one case with both evidence sets. The supersession mechanism
-already models this for the automated path — when a correlation completes, the
-stage incidents it absorbed are closed with `Superseded by INC-…` — so the
-manual version is mostly an explicit relationship table plus the UI to drive it.
+- **Linking and merging have no UI.** The endpoints work and are tested, but an
+  analyst cannot link or merge from the dashboard — it has to be driven through
+  the API. This is the same gap the queue work had before its UI landed, and it
+  is the honest answer to "is this feature done?": done for a client, not for a
+  person.
+- **Presence is not displayed.** The heartbeat endpoint returns who else is
+  viewing; nothing calls it yet, so the "Dana is viewing this" indicator the
+  design was for does not appear.
+- **A merge preview.** Merging is irreversible in practice and currently
+  commits immediately. It should show what will move — how many alerts, which
+  entities, the resulting risk — before it does it, the same dry-run-first
+  pattern the response playbooks use.
 
-*(Notifications were the third item here and are now delivered — see the table
-above.)*
+Everything else in the phase is delivered and exercised end to end.
 
 ### API surface
 
@@ -251,12 +258,13 @@ Presence is the last small item.
     on startup (`db_auto_migrate`), the test suite still builds throwaway
     databases from the models for speed, and `tests/integration/test_migrations.py`
     is what stops the two drifting apart.
-12. **Make mypy a real gate.** The CI type-check step is
-    `continue-on-error: true` and there is a standing backlog of ~90 findings,
-    mostly `Optional` handling in the older storage and telemetry modules plus
-    missing `types-PyYAML` stubs. An advisory type checker is a type checker
-    nobody reads: install the stubs, fix the genuine `None` paths, and drop the
-    `continue-on-error`.
+12. ~~**Make mypy a real gate.**~~ **Done.** The backlog went from 93 errors to
+    zero and the CI step is blocking. Half of it was one mis-typed dict splatted
+    into every Prometheus metric; most of the rest were signatures that claimed
+    to accept or return `Optional` when the code did neither — `_distinct` said
+    it took `None` (it would raise) and could return `None` (it never did).
+    Fixing the annotations to match the behaviour also turned up a duplicated
+    helper to delete.
 13. **Multi-analyst operations** — Phase 7 above. The queue mechanics, the
     permission model and the migration groundwork are in; routing rules, SLA
     timers and the dashboard queue UI are what remain.
@@ -444,7 +452,6 @@ Channels exist; the judgement about *when* to interrupt somebody does not:
 - **Chaos tests in the compose stack.** Kill the normaliser mid-pipeline and
   assert zero loss. The failure-mode tests cover this against the in-process
   bus; the distributed version is where the interesting bugs live.
-- **Make mypy a real gate** (gap 11): ~90 findings, currently advisory.
 
 ### Compliance and governance
 

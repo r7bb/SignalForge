@@ -210,6 +210,20 @@ class TeamMemberRequest(BaseModel):
     role: str = Field(default="member", pattern="^(member|lead)$")
 
 
+class LinkRequest(BaseModel):
+    incident: str = Field(min_length=1, description="the other incident's key or id")
+    relationship: str = Field(default="related_to", pattern="^(related_to|duplicate_of|caused_by)$")
+    reason: Optional[str] = None
+
+
+class MergeRequest(BaseModel):
+    """Fold ``incident`` into the one addressed by the route."""
+
+    incident: str = Field(min_length=1, description="the incident to merge away")
+    reason: Optional[str] = None
+    expected_version: Optional[int] = None
+
+
 class NoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
 

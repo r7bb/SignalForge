@@ -59,7 +59,11 @@ except ImportError:  # pragma: no cover
 
 REGISTRY = CollectorRegistry() if PROMETHEUS_AVAILABLE else None
 
-_kwargs = {"registry": REGISTRY} if PROMETHEUS_AVAILABLE else {}
+#: Splatted into every metric constructor. Typed as ``Dict[str, Any]``
+#: deliberately: the value is a registry or nothing, and a type checker cannot
+#: express "a ** splat of exactly this mapping" against the constructors'
+#: signatures - inferring the narrow type produces one error per metric.
+_kwargs: Dict[str, Any] = {"registry": REGISTRY} if PROMETHEUS_AVAILABLE else {}
 
 # --------------------------------------------------------------------------- #
 # Pipeline metrics
@@ -177,7 +181,9 @@ RULES_LOADED = Gauge(
 
 
 def render_metrics() -> bytes:
-    if not PROMETHEUS_AVAILABLE:
+    # REGISTRY is only None when prometheus_client is absent, but the type
+    # checker cannot see that the two conditions are the same one.
+    if not PROMETHEUS_AVAILABLE or REGISTRY is None:
         return generate_latest()
     return generate_latest(REGISTRY)
 

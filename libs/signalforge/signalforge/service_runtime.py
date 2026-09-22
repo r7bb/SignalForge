@@ -203,6 +203,9 @@ def start_metrics_server(port: int) -> bool:
 
         from .telemetry import REGISTRY
 
+        if REGISTRY is None:  # prometheus_client present but no registry built
+            log.warning("metrics server not started", extra={"error": "no registry"})
+            return False
         start_http_server(port, registry=REGISTRY)
         log.info("metrics server listening", extra={"port": port})
         return True

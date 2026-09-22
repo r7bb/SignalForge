@@ -146,9 +146,9 @@ class Pipeline:
                 result.incidents.append(incident)
             return
 
-        incident = self.incidents.open_from_alert(alert)
-        if incident is not None:
-            result.incidents.append(incident)
+        opened = self.incidents.open_from_alert(alert)
+        if opened is not None:
+            result.incidents.append(opened)
 
     # ------------------------------------------------------------------ #
     def sweep(self) -> Dict[str, int]:

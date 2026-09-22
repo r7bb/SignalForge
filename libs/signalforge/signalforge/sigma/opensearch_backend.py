@@ -39,7 +39,9 @@ def _field_query(matcher: FieldMatcher) -> Dict[str, Any]:
         return {"script": {"script": {"source": script, "lang": "painless"}}}
 
     if "cidr" in modifiers:
-        clauses = [{"term": {field_name: str(value)}} for value in matcher.values]
+        clauses: List[Dict[str, Any]] = [
+            {"term": {field_name: str(value)}} for value in matcher.values
+        ]
         if field_name not in IP_FIELDS:
             clauses = [
                 {"prefix": {field_name: str(value).split("/", 1)[0].rstrip("0.")}}

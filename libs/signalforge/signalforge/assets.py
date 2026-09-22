@@ -57,14 +57,16 @@ class AssetInventory:
         return self._lookup(self.resources, resource)
 
     def is_service_account(self, user: Optional[str]) -> bool:
-        return bool(user) and any(
-            fnmatch.fnmatch(user.lower(), pattern) for pattern in self.service_accounts
-        )
+        if not user:
+            return False
+        lowered = user.lower()
+        return any(fnmatch.fnmatch(lowered, pattern) for pattern in self.service_accounts)
 
     def is_load_test_account(self, user: Optional[str]) -> bool:
-        return bool(user) and any(
-            fnmatch.fnmatch(user.lower(), pattern) for pattern in self.load_test_accounts
-        )
+        if not user:
+            return False
+        lowered = user.lower()
+        return any(fnmatch.fnmatch(lowered, pattern) for pattern in self.load_test_accounts)
 
     def criticality_score(
         self,
