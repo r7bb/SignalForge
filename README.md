@@ -535,6 +535,19 @@ link recording where it went, which is what makes the merge explainable later.
 Merging an already-closed incident is refused: closing it was a decision
 somebody made, and a merge must not bury it.
 
+**There is no UI for this yet.** Until there is, `scripts/case.py` is the
+supported way to drive it — and it adds the merge preview the API does not have,
+because a merge is not practically reversible:
+
+```bash
+python scripts/case.py link INC-2004 INC-2007 --rel related_to --reason "same credential"
+python scripts/case.py merge INC-2005 INC-2006              # preview
+python scripts/case.py merge INC-2005 INC-2006 --confirm    # apply
+```
+
+Recipes and the two deliberate refusals are in
+[docs/RUNBOOK.md](docs/RUNBOOK.md#linking-merging-and-presence-no-ui-yet).
+
 ### Who else is looking at this
 
 Optimistic concurrency stops a stale write, but only *after* the analyst has
@@ -546,6 +559,11 @@ so it lives in Redis when configured and in-process otherwise, with a 30-second
 TTL. A row per heartbeat would turn a cosmetic feature into write load on the
 incident table. If Redis is unreachable it falls back to in-process rather than
 failing — presence must never stop the API serving incidents.
+
+Nothing in the dashboard calls it yet, so the indicator this was built for does
+not appear. `python scripts/case.py viewers INC-2004` is the workaround, and it
+reports which backend is in use — `memory` in a multi-replica deployment means
+each replica sees only its own viewers.
 
 ### Discussion and watchers
 
@@ -984,8 +1002,8 @@ correlated into one case by `sf-corr-0003`.
 **What is not pictured:** the SLA countdown column on the queue, the SOC
 performance panel on the overview, and the comment thread — all of which
 arrived after these captures were taken. Case linking, merging and presence
-have no dashboard surface at all yet: they are API-only, and the roadmap says
-so.
+have no dashboard surface at all yet: they are API-only, driven through
+`scripts/case.py`, and the roadmap says so.
 
 ## Roadmap
 

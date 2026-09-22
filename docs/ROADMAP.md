@@ -119,8 +119,8 @@ are named under *What is left* rather than counted as finished.
 | Threaded comments and mentions | **done** - replies nest under their parent, `@handle` resolves on local part or full address, ambiguity reported rather than guessed, unresolved handles returned to the author |
 | Watchers | **done** - separate from assignment, records why each person is watching, mention-driven watch never implies ownership |
 | Notification channels | **done** - log/webhook/Slack, driven off mention, transfer and SLA-breach events; persisted before delivery, 0/1/5/30-minute retry then give up, never sent to the actor; `GET /stats/notifications` is the delivery log |
-| Presence | **partial** - tracker and heartbeat endpoint done (30s TTL, Redis when configured, falls back rather than failing); nothing in the dashboard calls it yet |
-| Case linking and merging | **partial** - three relationships with per-direction labels, symmetric links stored once, merges that move evidence rather than copying it, refusal to merge an already-closed case; **API-only, no UI** |
+| Presence | **partial** - tracker and heartbeat endpoint done (30s TTL, Redis when configured, falls back rather than failing); nothing in the dashboard calls it yet, so `scripts/case.py viewers` is the way to see it |
+| Case linking and merging | **partial** - three relationships with per-direction labels, symmetric links stored once, merges that move evidence rather than copying it, refusal to merge an already-closed case; **no UI - driven by `scripts/case.py`** |
 | Dashboard queue UI | **done** - `/queues` with team depth, scope switcher (My work / Unclaimed / All open), oldest-first ordering and per-row claim; claim/release, park-with-timer and transfer-with-reason on the incident page; the shift-handover report |
 | Concurrent-edit UX | **done** - a stale write surfaces the conflict and reloads the page rather than failing silently |
 
@@ -130,17 +130,21 @@ The mechanics are complete. What is **not** built is the dashboard surface for
 the last three pieces:
 
 - **Linking and merging have no UI.** The endpoints work and are tested, but an
-  analyst cannot link or merge from the dashboard — it has to be driven through
-  the API. This is the same gap the queue work had before its UI landed, and it
-  is the honest answer to "is this feature done?": done for a client, not for a
-  person.
+  analyst cannot link or merge from the dashboard. This is the same gap the
+  queue work had before its UI landed, and it is the honest answer to "is this
+  feature done?": done for a client, not for a person.
 - **Presence is not displayed.** The heartbeat endpoint returns who else is
   viewing; nothing calls it yet, so the "Dana is viewing this" indicator the
   design was for does not appear.
-- **A merge preview.** Merging is irreversible in practice and currently
-  commits immediately. It should show what will move — how many alerts, which
-  entities, the resulting risk — before it does it, the same dry-run-first
-  pattern the response playbooks use.
+- **A server-side merge preview.** The API commits immediately.
+
+**The workaround, and it is a real one:** `scripts/case.py` drives all three
+from a terminal — see
+[the runbook](RUNBOOK.md#linking-merging-and-presence-no-ui-yet). It also
+supplies the missing merge preview client-side, refusing to commit without
+`--confirm` and printing what would move first. That is enough to *use* these
+features today; it is not enough to call them finished, which is why they are
+marked partial rather than done.
 
 Everything else in the phase is delivered and exercised end to end.
 
@@ -274,6 +278,24 @@ Presence is the last small item.
 Beyond the ordered gaps. Each of these is something a real SOC asks for; the
 note after each says what already exists to build it on, because an idea with
 no foothold in the codebase is just a wish.
+
+### If I only did five more things
+
+The list below is long. This is the order I would actually work in, chosen for
+value per day rather than for interest:
+
+| # | Item | Why this one |
+|---|---|---|
+| 1 | **The distributed benchmark** (gap 1) | The published 3,603 events/sec is single-process. Until the same workload runs through Redpanda + OpenSearch + PostgreSQL, the number proves the engine is not the bottleneck and nothing else. Half a day with the compose stack. |
+| 2 | **Detection health monitoring** | A rule that has not fired in 30 days while its logsource flows is broken, not lucky. Silent detection failure is the one failure mode nobody notices until an incident, and the data to spot it — rule hit counts, per-source volume — is already collected. |
+| 3 | **Rule impact simulation in the PR** | Run a candidate rule over 30 days of stored events and comment the result on the pull request. Moves the noise argument to before the merge. The retro-hunt compiler already builds the query. |
+| 4 | **The dashboard UI for linking, merging and presence** | Three tested features that a person cannot reach. `scripts/case.py` makes them usable; it does not make them discoverable. |
+| 5 | **Ingest cost attribution** | Bytes per source against the alerts that source produced. The report that decides SIEM budgets, and almost nothing exposes it. |
+
+Two things I would deliberately *not* do next, despite their appeal:
+**AI-assisted analysis** (worth doing, but the evaluation harness has to come
+first or it is a demo) and **Kubernetes/Helm** (compose is genuinely adequate
+until there is a distributed benchmark to size a cluster against).
 
 ### Detection engineering
 

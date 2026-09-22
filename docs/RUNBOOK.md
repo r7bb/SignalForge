@@ -105,6 +105,84 @@ the platform deliberately does not make for you.
   dedup key differed — most often because one alert had no principal, so the
   group key changed.
 
+## Linking, merging and presence (no UI yet)
+
+These three are **API-only**: the endpoints work and are tested, but the
+dashboard has no surface for them yet (see *What is left* in the roadmap).
+`scripts/case.py` is the supported way to drive them until it does — it beats
+hand-rolling `curl` with a bearer token, and it adds the merge preview the API
+does not have.
+
+```bash
+export SIGNALFORGE_API=http://localhost:8000/api/v1
+export SIGNALFORGE_EMAIL=dana@acme.test
+export SIGNALFORGE_PASSWORD=...          # or set SIGNALFORGE_TOKEN instead
+export SIGNALFORGE_TENANT=acme
+```
+
+Credentials come from the environment on purpose: a password passed as an
+argument ends up in shell history.
+
+### Relating two incidents
+
+```bash
+python scripts/case.py links INC-2004
+python scripts/case.py link INC-2004 INC-2007 --rel related_to --reason "same credential store"
+python scripts/case.py unlink INC-2004 INC-2007
+```
+
+`--rel` is one of `related_to`, `duplicate_of`, `caused_by`, asserted *from*
+the first incident *towards* the second. The link reads correctly from both
+ends: `INC-2007` will show `<- related_to INC-2004`, and the target of a
+`caused_by` shows `led_to` rather than the same word reversed.
+
+### Merging duplicates
+
+```bash
+python scripts/case.py merge INC-2005 INC-2006                     # preview
+python scripts/case.py merge INC-2005 INC-2006 --confirm --reason "one intrusion"
+```
+
+**It previews unless you pass `--confirm`.** A merge is not practically
+reversible, so the preview shows what will move before anything does:
+
+```
+Merge preview
+  keep    INC-2005  Unusual Access to Critical Data
+  merge   INC-2006  Unusual Access to Critical Data
+
+                         keep       merge      after
+  alerts                 1          1          2
+  evidence events        1          1          2
+  risk                   95         79         95
+  source_ips             10.0.7.14, 185.220.101.7
+
+  INC-2006 closes with 'Merged into INC-2005'
+
+Preview only. Re-run with --confirm to apply.
+```
+
+Two refusals worth knowing about, both deliberate:
+
+- **`403` without the responder role.** A merge moves evidence between cases
+  and closes one; it is harder to unpick than a transfer.
+- **An already-closed incident cannot be merged.** Closing it was a decision
+  somebody made, and a merge must not bury it. Reopen it first if the merge is
+  genuinely right.
+
+### Who else is on this incident
+
+```bash
+python scripts/case.py viewers INC-2004      # also sends your own heartbeat
+python scripts/case.py watch INC-2004        # follow it without owning it
+python scripts/case.py watch INC-2004 --stop
+```
+
+Presence has a 30-second TTL and is held in Redis when `SIGNALFORGE_REDIS_URL`
+is set, in-process otherwise. `viewers` reports the backend it is using — if it
+says `memory` in a multi-replica deployment, each replica sees only its own
+viewers, which is the known limitation.
+
 ## Running a response action
 
 1. An analyst requests a playbook from the incident page (or
