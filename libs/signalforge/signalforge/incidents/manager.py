@@ -17,12 +17,13 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..attack import kill_chain, sort_tactics
+from ..auth.security import role_allows
 from ..config import Settings, get_settings
 from ..correlate.engine import CorrelationHit
 from ..correlate.risk import risk_level, score_incident
@@ -39,13 +40,25 @@ from ..models.incident import (
     IncidentStatus,
     TimelineEntry,
 )
+from ..models.link import LinkRelationship, inverse_label, is_symmetric
 from ..models.ocsf import OcsfEvent
+from ..notify import NotificationKind, NotificationService
+from ..routing import RoutingFacts, RoutingTable, load_routing_table
+from ..sla import SlaPolicy, evaluate_incident, load_policy
 from ..storage import db as dbm
 from ..storage.events import EventStore
+from .mentions import MentionResult, resolve_mentions
+from .teams import TeamService
 
-if TYPE_CHECKING:  # import cycle at runtime; only needed for the annotations
-    from ..models.link import LinkRelationship
-    from .mentions import MentionResult
+# Everything above was previously imported inside the methods that used it,
+# behind a comment claiming an import cycle. There is no cycle: nothing under
+# models/, storage/, sla, notify, routing or auth imports this package, and the
+# only in-library importer of `incidents` is pipeline.py, which is downstream.
+#
+# Importing at module level is what lets the collaborator properties below
+# carry real return types. While they returned an implicit Any, every call
+# through self.sla / self.teams / self.notifier / self.routing was unchecked -
+# even though the type check was reported as clean.
 
 log = logging.getLogger("signalforge.incidents")
 
@@ -88,6 +101,13 @@ class IncidentManager:
         self.session_factory = session_factory
         self.event_store = event_store
         self.settings = settings or get_settings()
+        # Built on first use. Declared here so they are typed attributes rather
+        # than getattr() lookups, which is what let the properties below return
+        # an unchecked Any.
+        self._sla: Optional[SlaPolicy] = None
+        self._notifier: Optional[NotificationService] = None
+        self._routing: Optional[RoutingTable] = None
+        self._teams: Optional[TeamService] = None
 
     # ------------------------------------------------------------------ #
     # Alerts
@@ -1018,8 +1038,6 @@ class IncidentManager:
             )
             session.commit()
 
-        from ..notify import NotificationKind
-
         self._notify(
             tenant,
             incident.key,
@@ -1065,8 +1083,6 @@ class IncidentManager:
         actor_role: str,
         actor_user_id: Optional[str],
     ) -> None:
-        from ..auth.security import role_allows
-
         required = TRANSITION_MIN_ROLE.get(target, "analyst")
         if role_allows(actor_role, required):
             return
@@ -1095,11 +1111,9 @@ class IncidentManager:
     # Service levels
     # ------------------------------------------------------------------ #
     @property
-    def sla(self):
+    def sla(self) -> SlaPolicy:
         """The SLA policy, loaded once per manager."""
-        if getattr(self, "_sla", None) is None:
-            from ..sla import load_policy
-
+        if self._sla is None:
             self._sla = load_policy(self.settings.sla_path)
         return self._sla
 
@@ -1110,8 +1124,6 @@ class IncidentManager:
         incident.sla_resolve_due = resolve_due
 
     def sla_state(self, incident: Incident, *, now: Optional[datetime] = None) -> Dict[str, Any]:
-        from ..sla import evaluate_incident
-
         return evaluate_incident(incident, policy=self.sla, now=now)
 
     def sla_breaches(
@@ -1214,8 +1226,6 @@ class IncidentManager:
                 extra={"incident": incident.key, "tenant": tenant, "detail": detail},
             )
 
-        from ..notify import NotificationKind
-
         self._notify(
             tenant,
             incident.key,
@@ -1227,15 +1237,24 @@ class IncidentManager:
         return incident
 
     @property
-    def notifier(self):
+    def notifier(self) -> NotificationService:
         """Lazily-built notification service."""
-        if getattr(self, "_notifier", None) is None:
-            from ..notify import NotificationService
-
+        if self._notifier is None:
             self._notifier = NotificationService(self.session_factory, self.settings)
         return self._notifier
 
-    def _notify(self, *args: Any, **kwargs: Any) -> None:
+    def _notify(
+        self,
+        tenant: str,
+        reference: str,
+        kind: NotificationKind,
+        subject: str,
+        body: str,
+        *,
+        actor: Optional[str] = None,
+        explicit: Optional[Iterable[str]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Fire a notification without letting it break the operation.
 
         A webhook being down must not fail a claim or a transfer: the work
@@ -1243,16 +1262,23 @@ class IncidentManager:
         retry sweep picks it up.
         """
         try:
-            self.notifier.notify(*args, **kwargs)
+            self.notifier.notify(
+                tenant,
+                reference,
+                kind,
+                subject,
+                body,
+                actor=actor,
+                explicit=explicit,
+                payload=payload,
+            )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("notification dispatch failed", extra={"error": str(exc)})
 
     @property
-    def routing(self):
+    def routing(self) -> RoutingTable:
         """The routing table, loaded once per manager."""
-        if getattr(self, "_routing", None) is None:
-            from ..routing import load_routing_table
-
+        if self._routing is None:
             self._routing = load_routing_table(self.settings.routing_path)
             for problem in self._routing.errors:
                 log.warning("routing rule rejected", extra={"detail": problem})
@@ -1270,16 +1296,19 @@ class IncidentManager:
         if not self.settings.routing_enabled:
             return
 
-        from ..routing import RoutingFacts
-
         facts = RoutingFacts.from_incident(incident, alerts)
-        rule = self.routing.match(facts)
+        matched = self.routing.match(facts)
 
-        slug = rule.team if rule is not None else None
+        # Branch on the rule itself rather than on a slug derived from it: the
+        # indirection hid the dependency from the type checker, and the audit
+        # below needs to know whether the rule is what actually placed it.
         team_row = None
-        if slug:
+        applied = matched
+        if matched is not None:
             team_row = session.scalars(
-                select(dbm.Team).where(dbm.Team.tenant == incident.tenant, dbm.Team.slug == slug)
+                select(dbm.Team).where(
+                    dbm.Team.tenant == incident.tenant, dbm.Team.slug == matched.team
+                )
             ).first()
             if team_row is None:
                 # The rule names a queue this tenant has not created. Fall back
@@ -1288,29 +1317,35 @@ class IncidentManager:
                 # rule, not a reason to lose the incident.
                 log.warning(
                     "routing rule names an unknown team",
-                    extra={"rule": rule.id, "team": slug, "tenant": incident.tenant},
+                    extra={
+                        "rule": matched.id,
+                        "team": matched.team,
+                        "tenant": incident.tenant,
+                    },
                 )
+
         if team_row is None:
             team_row = session.scalars(
                 select(dbm.Team).where(
                     dbm.Team.tenant == incident.tenant, dbm.Team.is_default.is_(True)
                 )
             ).first()
-            rule = None if team_row is None else rule
-
+            # The default queue placed it, not the rule - so the audit must not
+            # credit a rule whose team does not exist.
+            applied = None
         if team_row is None:
             return  # No queues configured at all: leave it unrouted.
 
         incident.team_id = team_row.id
         incident.team_slug = team_row.slug
-        rule_id = rule.id if rule else "default-queue"
-        matched = rule.describe() if rule else "no rule matched"
+        rule_id = applied.id if applied else "default-queue"
+        match_summary = applied.describe() if applied else "no rule matched"
         incident.record(
             "incident.routed",
             actor="router",
             detail=team_row.slug,
             rule=rule_id,
-            matched=matched,
+            matched=match_summary,
         )
         # Also to the audit table, which is what the API reads: "why is this in
         # my queue?" has to be answerable without opening the incident payload.
@@ -1323,15 +1358,15 @@ class IncidentManager:
             entity_id=incident.incident_id,
             detail=team_row.slug,
             rule=rule_id,
-            matched=matched,
+            matched=match_summary,
         )
 
     @property
-    def teams(self):
-        """Lazily-built team service (kept off __init__ to avoid a cycle)."""
-        if getattr(self, "_teams", None) is None:
-            from .teams import TeamService
-
+    def teams(self) -> TeamService:
+        """Lazily-built team service. Built on first use rather than in
+        __init__ so constructing a manager stays cheap; there is no import
+        cycle to avoid, despite what this comment used to say."""
+        if self._teams is None:
             self._teams = TeamService(self.session_factory)
         return self._teams
 
@@ -1349,10 +1384,7 @@ class IncidentManager:
         reason: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Assert a relationship between two incidents."""
-        from ..models.link import LinkRelationship as Rel
-        from ..models.link import is_symmetric
-
-        relationship = Rel(relationship)
+        relationship = LinkRelationship(relationship)
         with self.session_factory() as session:
             source = self._require(session, tenant, reference)
             target = self._find(session, tenant, other)
@@ -1442,9 +1474,6 @@ class IncidentManager:
 
     def links(self, tenant: str, reference: str) -> List[Dict[str, Any]]:
         """Every edge touching this incident, read from its own side."""
-        from ..models.link import LinkRelationship as Rel
-        from ..models.link import inverse_label
-
         with self.session_factory() as session:
             row = self._require(session, tenant, reference)
             outgoing = session.execute(
@@ -1482,7 +1511,7 @@ class IncidentManager:
                         "other_status": other.status,
                         # Read from this end: the target of a duplicate_of is
                         # "duplicated_by", not a backwards "duplicate_of".
-                        "relationship": inverse_label(Rel(link.relationship)),
+                        "relationship": inverse_label(LinkRelationship(link.relationship)),
                         "reason": link.reason,
                         "created_by": link.created_by,
                         "created_at": _as_utc(link.created_at),
@@ -1637,8 +1666,6 @@ class IncidentManager:
         nobody is reported back rather than dropped, because silently
         discarding it leaves the author believing somebody was notified.
         """
-        from .mentions import resolve_mentions
-
         if not body.strip():
             raise IncidentError("comment body cannot be empty")
 
@@ -1713,8 +1740,6 @@ class IncidentManager:
             session.commit()
 
         if mentions.resolved:
-            from ..notify import NotificationKind
-
             self._notify(
                 tenant,
                 incident.key,
